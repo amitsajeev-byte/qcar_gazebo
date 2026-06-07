@@ -25,7 +25,7 @@ endif()
 
 ament_package()
 
-install(DIRECTORY urdf launch worlds models config rviz scripts
+install(DIRECTORY urdf launch worlds models config rviz scripts maps
   DESTINATION share/${PROJECT_NAME}
 )
 
