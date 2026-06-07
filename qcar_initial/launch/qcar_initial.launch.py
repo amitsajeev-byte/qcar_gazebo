@@ -18,7 +18,7 @@ def generate_launch_description():
 
     return LaunchDescription([
         ExecuteProcess(
-            cmd=['gazebo', '--verbose',
+            cmd=['gazebo',
                  os.path.join(pkg, 'worlds', 'myworld.world'),
                  '-s', 'libgazebo_ros_factory.so',
                  '-s', 'libgazebo_ros_init.so'],
@@ -79,6 +79,20 @@ def generate_launch_description():
             name='rviz2',
             output='screen',
             arguments=['-d', os.path.join(pkg, 'rviz', 'qcar.rviz')],
+            parameters=[{'use_sim_time': True}]
+        ),
+        Node(
+            package='qcar_initial',
+            executable='cmd_vel_to_drive.py',
+            name='cmd_vel_to_drive',
+            output='screen',
+            parameters=[{'use_sim_time': True}]
+        ),
+        Node(
+            package='tf2_ros',
+            executable='static_transform_publisher',
+            name='odom_to_base',
+            arguments=['0', '0', '0', '0', '0', '0', 'odom', 'base'],
             parameters=[{'use_sim_time': True}]
         ),
     ])
