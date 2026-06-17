@@ -3,7 +3,6 @@
 import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import Twist
-from std_msgs.msg import Float64MultiArray
 import sys
 import tty
 import termios
@@ -33,11 +32,6 @@ class QCarTwistTeleop(Node):
         self.drive_pub = self.create_publisher(
             Twist, '/cmd_vel', 10
         )
-        self.steer_pub = self.create_publisher(
-            Float64MultiArray,
-            '/steering_controller/commands',
-            10
-        )
 
         self.speed = 0.2  # m/s
         self.steer_angle = 0.4  # radians
@@ -57,15 +51,11 @@ class QCarTwistTeleop(Node):
             termios.tcsetattr(fd, termios.TCSADRAIN, old)
         return key
 
-    def publish_drive(self, speed):
+    def publish_drive(self, speed, steer):
         msg = Twist()
         msg.linear.x = speed
+        msg.angular.z = steer
         self.drive_pub.publish(msg)
-
-    def publish_steer(self, angle):
-        msg = Float64MultiArray()
-        msg.data = [angle, angle]
-        self.steer_pub.publish(msg)
 
     def run(self):
         while rclpy.ok():
@@ -99,8 +89,7 @@ class QCarTwistTeleop(Node):
             elif key == '\x03':
                 break
 
-            self.publish_drive(self.current_drive)
-            self.publish_steer(self.current_steer)
+            self.publish_drive(self.current_drive, self.current_steer)
 
 def main():
     rclpy.init()
@@ -110,8 +99,7 @@ def main():
     except Exception as e:
         print(e)
     finally:
-        node.publish_drive(0.0)
-        node.publish_steer(0.0)
+        node.publish_drive(0.0, 0.0)
         node.destroy_node()
         rclpy.shutdown()
 

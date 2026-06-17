@@ -44,55 +44,11 @@ def generate_launch_description():
             output='screen'
         ),
         Node(
-            package='joint_state_publisher',
-            executable='joint_state_publisher',
-            output='screen',
-            parameters=[{
-                'use_sim_time': True,
-                'source_list': ['/joint_states']
-            }]
-        ),
-        Node(
-            package='controller_manager',
-            executable='spawner',
-            arguments=['joint_state_broadcaster'],
-            output='screen',
-            parameters=[{'use_sim_time': True}]
-        ),
-        Node(
-            package='controller_manager',
-            executable='spawner',
-            arguments=['drive_controller'],
-            output='screen',
-            parameters=[{'use_sim_time': True}]
-        ),
-        Node(
-            package='controller_manager',
-            executable='spawner',
-            arguments=['steering_controller'],
-            output='screen',
-            parameters=[{'use_sim_time': True}]
-        ),
-        Node(
             package='rviz2',
             executable='rviz2',
             name='rviz2',
             output='screen',
             arguments=['-d', os.path.join(pkg, 'rviz', 'qcar.rviz')],
-            parameters=[{'use_sim_time': True}]
-        ),
-        Node(
-            package='qcar_initial',
-            executable='cmd_vel_to_drive.py',
-            name='cmd_vel_to_drive',
-            output='screen',
-            parameters=[{'use_sim_time': True}]
-        ),
-        Node(
-            package='tf2_ros',
-            executable='static_transform_publisher',
-            name='odom_to_base',
-            arguments=['0', '0', '0', '0', '0', '0', 'odom', 'base'],
             parameters=[{'use_sim_time': True}]
         ),
     ])

@@ -27,11 +27,11 @@
             <inertia ixx="0.001" ixy="0" ixz="0" iyy="0.001" iyz="0" izz="0.001" />
         </inertial>
     </link>
-    <joint name="body_lidar_joint" type="continuous">
-        <parent link="base" />
-        <child link="lidar" />
-        <origin rpy="0 0 0" xyz="-0.01227 -0.00045 0.16152" />
-        <axis xyz="0 0 1" />
+    <joint name="body_lidar_joint" type="fixed">
+        <parent link="base"/>
+        <child link="lidar"/>
+        <origin rpy="0 0 0" xyz="-0.01227 -0.00045 0.16152"/>
+        <axis xyz="0 0 1"/>
     </joint>
     <link name="lidar">
         <visual>
@@ -175,12 +175,12 @@
     <joint name="base_wheelrl_joint" type="continuous">
         <parent link="base" />
         <child link="wheelrl" />
-        <origin rpy="0 0 3.14" xyz="-0.12765 0.05610 0.03338" />
+        <origin rpy="0 0 0" xyz="-0.12765 0.05610 0.03338" />
         <axis xyz="0 1 0" />
     </joint>
     <link name="wheelrl">
         <visual>
-            <origin rpy="0 0 0" xyz="0 0 0" />
+            <origin rpy="0 0 3.14" xyz="0 0 0" />
             <geometry>
                 <mesh filename="package://qcar_initial/models/qcar/QCarWheel.stl"
                     scale="0.001 0.001 0.001" />
@@ -188,7 +188,7 @@
             <material name="orange" />
         </visual>
         <collision>
-            <origin rpy="0 0 0" xyz="0 0 0" />
+            <origin rpy="0 0 3.14" xyz="0 0 0" />
             <geometry>
                 <mesh filename="package://qcar_initial/models/qcar/QCarWheel.stl"
                     scale="0.001 0.001 0.001" />
@@ -386,10 +386,41 @@
         <maxVel>0.1</maxVel>
     </gazebo>
 
-    <gazebo>
+    <!-- <gazebo>
         <plugin name="gazebo_ros2_control" filename="libgazebo_ros2_control.so">
             <robotNamespace>/qcar</robotNamespace>
             <parameters>$(find qcar_initial)/config/qcar_controllers.yaml</parameters>
+        </plugin>
+    </gazebo> -->
+
+    <gazebo>
+        <plugin name="ackermann_drive" filename="libgazebo_ros_ackermann_drive.so">
+            <ros>
+                <remapping>cmd_vel:=/cmd_vel</remapping>
+                <remapping>odom:=/odom</remapping>
+            </ros>
+            <!-- Front wheel ROTATION joints (not the steering hubs) -->
+            <front_left_joint>hubfl_wheelfl_joint</front_left_joint>
+            <front_right_joint>hubfr_wheelfr_joint</front_right_joint>
+            <!-- Drive joints (rear wheels) -->
+            <rear_left_joint>base_wheelrl_joint</rear_left_joint>
+            <rear_right_joint>base_wheelrr_joint</rear_right_joint>
+            <!-- Steering hinge joints -->
+            <left_steering_joint>base_hubfl_joint</left_steering_joint>
+            <right_steering_joint>base_hubfr_joint</right_steering_joint>
+            <kingpin_width>0.1122</kingpin_width>       <!-- 2 × 0.05590 front track -->
+            <wheelbase>0.25725</wheelbase>              <!-- 0.12960 + 0.12765 -->
+            <wheel_radius>0.0335</wheel_radius>         <!-- verify against STL -->
+            <max_steer>0.5236</max_steer>              <!-- matches URDF limit (30°) -->
+            <max_speed>2.0</max_speed>
+            <left_steering_pid_gain>10 0 0.5</left_steering_pid_gain>
+            <right_steering_pid_gain>10 0 0.5</right_steering_pid_gain>
+            <linear_velocity_pid_gain>10 0 0.5</linear_velocity_pid_gain>
+            <publish_odom>true</publish_odom>
+            <publish_odom_tf>true</publish_odom_tf>
+            <publish_wheel_tf>true</publish_wheel_tf>
+            <odometry_frame>odom</odometry_frame>
+            <robot_base_frame>base</robot_base_frame>
         </plugin>
     </gazebo>
 
@@ -429,7 +460,7 @@
         </sensor>
     </gazebo>
 
-    <ros2_control name="qcar" type="system">
+    <!-- <ros2_control name="qcar" type="system">
         <hardware>
             <plugin>gazebo_ros2_control/GazeboSystem</plugin>
         </hardware>
@@ -457,7 +488,7 @@
             <state_interface name="position" />
             <state_interface name="velocity" />
         </joint>
-    </ros2_control>
+    </ros2_control> -->
 
 </robot>
   
