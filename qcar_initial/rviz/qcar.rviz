@@ -11,7 +11,7 @@ Panels:
         - /Map1
         - /MarkerArray1
       Splitter Ratio: 0.5
-    Tree Height: 746
+    Tree Height: 363
   - Class: rviz_common/Selection
     Name: Selection
   - Class: rviz_common/Tool Properties
@@ -196,7 +196,7 @@ Visualization Manager:
       Enabled: true
       Name: MarkerArray
       Namespaces:
-        Trajectory 0: true
+        {}
       Topic:
         Depth: 5
         Durability Policy: Volatile
@@ -249,7 +249,7 @@ Visualization Manager:
   Value: true
   Views:
     Current:
-      Angle: -1.504997968673706
+      Angle: 0
       Class: rviz_default_plugins/TopDownOrtho
       Enable Stereo Rendering:
         Stereo Eye Separation: 0.05999999865889549
@@ -259,7 +259,7 @@ Visualization Manager:
       Invert Z Axis: false
       Name: Current View
       Near Clip Distance: 0.009999999776482582
-      Scale: 39.42205047607422
+      Scale: 80
       Target Frame: <Fixed Frame>
       Value: TopDownOrtho (rviz_default_plugins)
       X: 0

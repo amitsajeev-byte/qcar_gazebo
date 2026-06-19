@@ -44,6 +44,36 @@ def generate_launch_description():
             output='screen'
         ),
         Node(
+            package='joint_state_publisher',
+            executable='joint_state_publisher',
+            output='screen',
+            parameters=[{
+                'use_sim_time': True,
+                'source_list': ['/joint_states']
+            }]
+        ),
+        Node(
+            package='controller_manager',
+            executable='spawner',
+            arguments=['joint_state_broadcaster'],
+            output='screen',
+            parameters=[{'use_sim_time': True}]
+        ),
+        Node(
+            package='controller_manager',
+            executable='spawner',
+            arguments=['drive_controller'],
+            output='screen',
+            parameters=[{'use_sim_time': True}]
+        ),
+        Node(
+            package='controller_manager',
+            executable='spawner',
+            arguments=['steering_controller'],
+            output='screen',
+            parameters=[{'use_sim_time': True}]
+        ),
+        Node(
             package='rviz2',
             executable='rviz2',
             name='rviz2',
