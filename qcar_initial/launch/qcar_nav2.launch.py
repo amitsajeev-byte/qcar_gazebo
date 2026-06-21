@@ -31,6 +31,15 @@ def generate_launch_description():
             parameters=[{'use_sim_time': True}]
         ),
 
+        # Real odometry TF from p3d plugin
+        Node(
+            package='qcar_initial',
+            executable='odom_to_tf.py',
+            name='odom_to_tf',
+            output='screen',
+            parameters=[{'use_sim_time': True}]
+        ),
+
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(
                 os.path.join(nav2_bringup_dir, 'launch', 'bringup_launch.py')

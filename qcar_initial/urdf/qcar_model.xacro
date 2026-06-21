@@ -466,6 +466,21 @@
         </sensor>
     </gazebo>
 
+    <!-- Ground truth odometry from Gazebo physics -->
+    <gazebo>
+        <plugin name="gazebo_ros_p3d" filename="libgazebo_ros_p3d.so">
+            <ros>
+                <remapping>odom:=/odom</remapping>
+            </ros>
+            <body_name>base</body_name>
+            <frame_name>odom</frame_name>
+            <update_rate>30</update_rate>
+            <xyz_offset>0 0 0</xyz_offset>
+            <rpy_offset>0 0 0</rpy_offset>
+            <gaussian_noise>0.0</gaussian_noise>
+        </plugin>
+    </gazebo>
+
     <ros2_control name="qcar" type="system">
         <hardware>
             <plugin>gazebo_ros2_control/GazeboSystem</plugin>

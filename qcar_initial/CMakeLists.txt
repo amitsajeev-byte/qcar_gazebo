@@ -32,5 +32,6 @@ install(DIRECTORY urdf launch worlds models config rviz scripts maps
 install(PROGRAMS
   scripts/qcar_teleop.py
   scripts/cmd_vel_to_drive.py
+  scripts/odom_to_tf.py
   DESTINATION lib/${PROJECT_NAME}
 )
