@@ -14,13 +14,13 @@ def generate_launch_description():
 
     return LaunchDescription([
         # Static odom->base transform since drive_controller publishes no real odometry
-        Node(
-            package='tf2_ros',
-            executable='static_transform_publisher',
-            name='odom_to_base_static',
-            arguments=['0', '0', '0', '0', '0', '0', 'odom', 'base'],
-            parameters=[{'use_sim_time': True}]
-        ),
+        # Node(
+        #     package='tf2_ros',
+        #     executable='static_transform_publisher',
+        #     name='odom_to_base_static',
+        #     arguments=['0', '0', '0', '0', '0', '0', 'odom', 'base'],
+        #     parameters=[{'use_sim_time': True}]
+        # ),
 
         # cmd_vel -> drive_controller/steering_controller converter
         Node(
