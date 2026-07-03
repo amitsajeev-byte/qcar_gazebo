@@ -7,6 +7,8 @@ from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
+from launch.actions import TimerAction
+
 
 def generate_launch_description():
     pkg = get_package_share_directory('qcar_updated')
@@ -30,32 +32,38 @@ def generate_launch_description():
             condition=IfCondition(launch_sim)
         ),
 
-        # cmd_vel -> drive_controller/steering_controller converter
-        Node(
-            package='qcar_initial',
-            executable='cmd_vel_to_drive.py',
-            name='cmd_vel_to_drive',
-            output='screen',
-            parameters=[{'use_sim_time': True}]
-        ),
+        # Delay everything below by 3 seconds
+        TimerAction(
+            period=3.0,
+            actions=[
 
-        # Real odometry TF from p3d plugin
-        Node(
-            package='qcar_initial',
-            executable='odom_to_tf.py',
-            name='odom_to_tf',
-            output='screen',
-            parameters=[{'use_sim_time': True}]
-        ),
+                # cmd_vel -> drive_controller/steering_controller converter
+                Node(
+                    package='qcar_updated',
+                    executable='cmd_vel_to_drive.py',
+                    name='cmd_vel_to_drive',
+                    output='screen',
+                    parameters=[{'use_sim_time': True}]
+                ),
 
-        IncludeLaunchDescription(
-            PythonLaunchDescriptionSource(
-                os.path.join(nav2_bringup_dir, 'launch', 'bringup_launch.py')
-            ),
-            launch_arguments={
-                'use_sim_time': 'true',
-                'params_file': nav2_params,
-                'map': map_file
-            }.items()
-        ),
+                # Real odometry TF from p3d plugin
+                Node(
+                    package='qcar_updated',
+                    executable='odom_to_tf.py',
+                    name='odom_to_tf',
+                    output='screen',
+                    parameters=[{'use_sim_time': True}]
+                ),
+
+                IncludeLaunchDescription(
+                    PythonLaunchDescriptionSource(
+                        os.path.join(nav2_bringup_dir, 'launch', 'bringup_launch.py')
+                    ),
+                    launch_arguments={
+                        'use_sim_time': 'true',
+                        'params_file': nav2_params,
+                        'map': map_file
+                    }.items()
+                ),
+            ])
     ])
