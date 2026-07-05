@@ -2,12 +2,11 @@ import os
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import IncludeLaunchDescription, DeclareLaunchArgument
+from launch.actions import TimerAction
 from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
-
-from launch.actions import TimerAction
 
 
 def generate_launch_description():
@@ -37,20 +36,12 @@ def generate_launch_description():
             period=3.0,
             actions=[
 
-                # cmd_vel -> drive_controller/steering_controller converter
+                # cmd_vel -> ackermann_steering_controller reference
                 Node(
-                    package='qcar_updated',
-                    executable='cmd_vel_to_drive.py',
-                    name='cmd_vel_to_drive',
-                    output='screen',
-                    parameters=[{'use_sim_time': True}]
-                ),
-
-                # Real odometry TF from p3d plugin
-                Node(
-                    package='qcar_updated',
-                    executable='odom_to_tf.py',
-                    name='odom_to_tf',
+                    package='topic_tools',
+                    executable='relay',
+                    name='cmd_vel_relay',
+                    arguments=['/cmd_vel', '/ackermann_steering_controller/reference_unstamped'],
                     output='screen',
                     parameters=[{'use_sim_time': True}]
                 ),

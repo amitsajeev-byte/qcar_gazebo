@@ -25,18 +25,23 @@ def generate_launch_description():
             PythonLaunchDescriptionSource(
                 os.path.join(pkg, 'launch', 'qcar_updated.launch.py')
             ),
+            launch_arguments={'disable_odom_tf': 'true'}.items(),
             condition=IfCondition(launch_sim)
         ),
 
-        # cmd_vel -> drive_controller/steering_controller converter, so the
-        # robot can be driven (e.g. via qcar_teleop_twist.py) while mapping.
-        # Note: odom_to_tf.py is intentionally NOT launched here - Cartographer
-        # itself broadcasts the odom->base transform (provide_odom_frame=true
-        # in qcar_2d.lua); running both would fight over the same TF edge.
+        # cmd_vel -> ackermann_steering_controller reference, so the robot can
+        # be driven (e.g. via qcar_teleop_twist.py) while mapping.
+        # Note: qcar_updated.launch.py is included above with
+        # disable_odom_tf:=true, which disables the controller's own odom
+        # TF broadcast (enable_odom_tf) -
+        # Cartographer itself broadcasts the odom->base transform
+        # (provide_odom_frame=true in qcar_2d.lua) and would otherwise fight
+        # the controller over the same TF edge.
         Node(
-            package='qcar_updated',
-            executable='cmd_vel_to_drive.py',
-            name='cmd_vel_to_drive',
+            package='topic_tools',
+            executable='relay',
+            name='cmd_vel_relay',
+            arguments=['/cmd_vel', '/ackermann_steering_controller/reference_unstamped'],
             output='screen',
             parameters=[{'use_sim_time': True}]
         ),

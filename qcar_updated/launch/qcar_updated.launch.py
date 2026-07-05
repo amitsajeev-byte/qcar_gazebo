@@ -1,7 +1,9 @@
 import os
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import ExecuteProcess
+from launch.actions import DeclareLaunchArgument, ExecuteProcess
+from launch.conditions import IfCondition, UnlessCondition
+from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 import xacro
 
@@ -15,13 +17,22 @@ def generate_launch_description():
         install_share,
         os.environ.get('GAZEBO_MODEL_PATH', '')
     ])
+    slam_override = os.path.join(pkg, 'config', 'qcar_controllers_slam_override.yaml')
+
+    disable_odom_tf = LaunchConfiguration('disable_odom_tf')
 
     return LaunchDescription([
+        DeclareLaunchArgument(
+            'disable_odom_tf',
+            default_value='false',
+            description='Disable the controller odom TF broadcast so Cartographer is the sole odom->base publisher'
+        ),
         ExecuteProcess(
             cmd=['gazebo',
                  os.path.join(pkg, 'worlds', 'myworld.world'),
                  '-s', 'libgazebo_ros_factory.so',
-                 '-s', 'libgazebo_ros_init.so'],
+                 '-s', 'libgazebo_ros_init.so',
+                 '--ros-args', '--log-level', 'ackermann_steering_controller:=error'],
             additional_env={
                 'GAZEBO_MODEL_DATABASE_URI': '',
                 'GAZEBO_MODEL_PATH': model_path,
@@ -62,16 +73,39 @@ def generate_launch_description():
         Node(
             package='controller_manager',
             executable='spawner',
-            arguments=['drive_controller'],
+            arguments=['ackermann_steering_controller'],
             output='screen',
-            parameters=[{'use_sim_time': True}]
+            parameters=[{'use_sim_time': True}],
+            condition=UnlessCondition(disable_odom_tf)
         ),
         Node(
             package='controller_manager',
             executable='spawner',
-            arguments=['steering_controller'],
+            arguments=['ackermann_steering_controller', '-p', slam_override],
+            output='screen',
+            parameters=[{'use_sim_time': True}],
+            condition=IfCondition(disable_odom_tf)
+        ),
+        Node(
+            package='topic_tools',
+            executable='relay',
+            name='odom_relay',
+            arguments=['/ackermann_steering_controller/odometry', '/odom'],
             output='screen',
             parameters=[{'use_sim_time': True}]
+        ),
+        # This controller version publishes its odom->base transform to a
+        # private tf_odometry topic instead of directly to /tf; relay it in
+        # so it actually enters the TF tree. Skipped in SLAM mode, where
+        # Cartographer is the sole odom->base broadcaster.
+        Node(
+            package='topic_tools',
+            executable='relay',
+            name='odom_tf_relay',
+            arguments=['/ackermann_steering_controller/tf_odometry', '/tf'],
+            output='screen',
+            parameters=[{'use_sim_time': True}],
+            condition=UnlessCondition(disable_odom_tf)
         ),
         Node(
             package='rviz2',
