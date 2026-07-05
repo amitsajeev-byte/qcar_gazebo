@@ -7,7 +7,6 @@ endif()
 
 # find dependencies
 find_package(ament_cmake REQUIRED)
-find_package(rclcpp REQUIRED)
 find_package(xacro REQUIRED)
 find_package(robot_state_publisher REQUIRED)
 
@@ -31,6 +30,7 @@ install(DIRECTORY urdf launch worlds models config rviz scripts maps
 
 install(PROGRAMS
   scripts/qcar_teleop.py
+  scripts/qcar_teleop_twist.py
   scripts/cmd_vel_to_drive.py
   scripts/odom_to_tf.py
   DESTINATION lib/${PROJECT_NAME}

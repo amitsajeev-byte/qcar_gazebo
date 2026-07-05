@@ -1,11 +1,16 @@
 #!/usr/bin/env python3
 
+import math
+
 import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import Twist
 import sys
 import tty
 import termios
+
+# Must match urdf/qcar_model.xacro hub joint origins (0.12960 + 0.12765 m).
+WHEELBASE = 0.25725
 
 MSG = """
 QCar Twist Teleop
@@ -34,9 +39,9 @@ class QCarTwistTeleop(Node):
         )
 
         self.speed = 0.2  # m/s
-        self.steer_angle = 0.4  # radians
+        self.steer_angle = 0.4  # desired steering angle, radians
         self.current_drive = 0.0
-        self.current_steer = 0.0
+        self.current_steer_angle_angle = 0.0
 
         print(MSG)
         print(f'Current speed: {self.speed:.2f} m/s')
@@ -51,10 +56,15 @@ class QCarTwistTeleop(Node):
             termios.tcsetattr(fd, termios.TCSADRAIN, old)
         return key
 
-    def publish_drive(self, speed, steer):
+    def publish_drive(self, speed, steer_angle):
+        # cmd_vel.angular.z is a yaw rate, not a steering angle: invert the
+        # bicycle model so downstream cmd_vel_to_drive.py recovers steer_angle.
+        yaw_rate = 0.0
+        if abs(speed) > 1e-3:
+            yaw_rate = speed * math.tan(steer_angle) / WHEELBASE
         msg = Twist()
         msg.linear.x = speed
-        msg.angular.z = steer
+        msg.angular.z = yaw_rate
         self.drive_pub.publish(msg)
 
     def run(self):
@@ -68,17 +78,17 @@ class QCarTwistTeleop(Node):
                 self.current_drive = -self.speed
                 print(f'Backward | speed: {self.speed:.2f} m/s')
             elif key == 'a':
-                self.current_steer = self.steer_angle
+                self.current_steer_angle = self.steer_angle
                 print(f'Steer Left  | angle: {self.steer_angle:.2f} rad')
             elif key == 'd':
-                self.current_steer = -self.steer_angle
+                self.current_steer_angle = -self.steer_angle
                 print(f'Steer Right | angle: {self.steer_angle:.2f} rad')
             elif key == 'z':
-                self.current_steer = 0.0
+                self.current_steer_angle = 0.0
                 print('Steer Centre')
             elif key == 'x':
                 self.current_drive = 0.0
-                self.current_steer = 0.0
+                self.current_steer_angle = 0.0
                 print('Stop & Centre')
             elif key == 'q':
                 self.speed = min(self.speed + 0.05, 1.0)
@@ -89,7 +99,7 @@ class QCarTwistTeleop(Node):
             elif key == '\x03':
                 break
 
-            self.publish_drive(self.current_drive, self.current_steer)
+            self.publish_drive(self.current_drive, self.current_steer_angle)
 
 def main():
     rclpy.init()
