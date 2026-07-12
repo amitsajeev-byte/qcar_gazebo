@@ -348,9 +348,9 @@
                  0.3/0/0.02 steering gain still destabilized the sim (gzserver crash
                  in Ogre::AxisAlignedBox::setExtents) even with the wheel inertia bump
                  above - these lower values are confirmed stable. -->
-            <left_steering_pid_gain>0.02 0 0.002</left_steering_pid_gain>
+            <left_steering_pid_gain>3.0 0 0.1</left_steering_pid_gain>
             <left_steering_i_range>0 0</left_steering_i_range>
-            <right_steering_pid_gain>0.02 0 0.002</right_steering_pid_gain>
+            <right_steering_pid_gain>3.0 0 0.1</right_steering_pid_gain>
             <right_steering_i_range>0 0</right_steering_i_range>
             <linear_velocity_pid_gain>0.3 0 0.005</linear_velocity_pid_gain>
             <linear_velocity_i_range>0 0</linear_velocity_i_range>
