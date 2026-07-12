@@ -8,7 +8,7 @@
         <visual>
             <origin rpy="0 0 0" xyz="0 0 0" />
             <geometry>
-                <mesh filename="package://qcar_updated/models/qcar/QCarBody.stl"
+                <mesh filename="file://$(find qcar_navigation)/meshes/QCar2Body.stl"
                     scale="0.001 0.001 0.001" />
             </geometry>
             <material name="white" />
@@ -16,7 +16,7 @@
         <collision>
             <origin rpy="0 0 0" xyz="0 0 0" />
             <geometry>
-                <mesh filename="package://qcar_updated/models/qcar/QCarBody.stl"
+                <mesh filename="file://$(find qcar_navigation)/meshes/QCar2Body.stl"
                     scale="0.001 0.001 0.001" />
             </geometry>
         </collision>
@@ -36,7 +36,7 @@
         <visual>
             <origin rpy="0 0 0" xyz="0 0 0" />
             <geometry>
-                <mesh filename="package://qcar_updated/models/qcar/QCarLidar.stl"
+                <mesh filename="file://$(find qcar_navigation)/meshes/QCar2Lidar.stl"
                     scale="0.001 0.001 0.001" />
             </geometry>
             <material name="blue" />
@@ -44,7 +44,7 @@
         <collision>
             <origin rpy="0 0 0" xyz="0 0 0" />
             <geometry>
-                <mesh filename="package://qcar_updated/models/qcar/QCarLidar.stl"
+                <mesh filename="file://$(find qcar_navigation)/meshes/QCar2Lidar.stl"
                     scale="0.001 0.001 0.001" />
             </geometry>
         </collision>
@@ -66,7 +66,7 @@
         <visual>
             <origin rpy="0 0 0" xyz="0 0 0" />
             <geometry>
-                <mesh filename="package://qcar_updated/models/qcar/QCarSteeringHubL.stl"
+                <mesh filename="file://$(find qcar_navigation)/meshes/QCarSteeringHubL.stl"
                     scale="0.001 0.001 0.001" />
             </geometry>
             <material name="orange" />
@@ -74,7 +74,7 @@
         <collision>
             <origin rpy="0 0 0" xyz="0 0 0" />
             <geometry>
-                <mesh filename="package://qcar_updated/models/qcar/QCarSteeringHubL.stl"
+                <mesh filename="file://$(find qcar_navigation)/meshes/QCarSteeringHubL.stl"
                     scale="0.001 0.001 0.001" />
             </geometry>
         </collision>
@@ -96,7 +96,7 @@
         <visual>
             <origin rpy="0 0 0" xyz="0 0 0" />
             <geometry>
-                <mesh filename="package://qcar_updated/models/qcar/QCarSteeringHubR.stl"
+                <mesh filename="file://$(find qcar_navigation)/meshes/QCarSteeringHubR.stl"
                     scale="0.001 0.001 0.001" />
             </geometry>
             <material name="orange" />
@@ -104,7 +104,7 @@
         <collision>
             <origin rpy="0 0 0" xyz="0 0 0" />
             <geometry>
-                <mesh filename="package://qcar_updated/models/qcar/QCarSteeringHubR.stl"
+                <mesh filename="file://$(find qcar_navigation)/meshes/QCarSteeringHubR.stl"
                     scale="0.001 0.001 0.001" />
             </geometry>
         </collision>
@@ -126,17 +126,18 @@
         <visual>
             <origin rpy="0 0 0" xyz="0 0 0" />
             <geometry>
-                <mesh filename="package://qcar_updated/models/qcar/QCarWheel.stl"
+                <mesh filename="file://$(find qcar_navigation)/meshes/QCarWheel.stl"
                     scale="0.001 0.001 0.001" />
             </geometry>
             <material name="red" />
         </visual>
-        <!-- collision is a cylinder, not the visual mesh - the ackermann drive
-             plugin's wheel-radius auto-detection only supports cylinder/sphere
-             collisions; with a mesh it silently reads radius=0 and poisons the
-             velocity PID. Radius is 3mm over the mesh's actual 0.033m to
-             guarantee real ground penetration/contact force. -->
         <collision>
+            <!-- gazebo_ros_ackermann_drive auto-computes wheel radius from the
+                 collision shape but only supports cylinder/sphere primitives -
+                 an STL mesh collision here makes it silently use radius 0,
+                 which divides target_linear by zero and the car never drives.
+                 Use a cylinder sized to the wheel mesh (radius 0.033m) instead,
+                 keeping the STL for the visual only. -->
             <origin rpy="1.5708 0 0" xyz="0 0 0" />
             <geometry>
                 <cylinder radius="0.036" length="0.0245" />
@@ -158,12 +159,18 @@
         <visual>
             <origin rpy="0 0 0" xyz="0 0 0" />
             <geometry>
-                <mesh filename="package://qcar_updated/models/qcar/QCarWheel.stl"
+                <mesh filename="file://$(find qcar_navigation)/meshes/QCarWheel.stl"
                     scale="0.001 0.001 0.001" />
             </geometry>
             <material name="orange" />
         </visual>
         <collision>
+            <!-- gazebo_ros_ackermann_drive auto-computes wheel radius from the
+                 collision shape but only supports cylinder/sphere primitives -
+                 an STL mesh collision here makes it silently use radius 0,
+                 which divides target_linear by zero and the car never drives.
+                 Use a cylinder sized to the wheel mesh (radius 0.033m) instead,
+                 keeping the STL for the visual only. -->
             <origin rpy="1.5708 0 0" xyz="0 0 0" />
             <geometry>
                 <cylinder radius="0.036" length="0.0245" />
@@ -189,12 +196,18 @@
         <visual>
             <origin rpy="0 0 0" xyz="0 0 0" />
             <geometry>
-                <mesh filename="package://qcar_updated/models/qcar/QCarWheel.stl"
+                <mesh filename="file://$(find qcar_navigation)/meshes/QCarWheel.stl"
                     scale="0.001 0.001 0.001" />
             </geometry>
             <material name="orange" />
         </visual>
         <collision>
+            <!-- gazebo_ros_ackermann_drive auto-computes wheel radius from the
+                 collision shape but only supports cylinder/sphere primitives -
+                 an STL mesh collision here makes it silently use radius 0,
+                 which divides target_linear by zero and the car never drives.
+                 Use a cylinder sized to the wheel mesh (radius 0.033m) instead,
+                 keeping the STL for the visual only. -->
             <origin rpy="1.5708 0 0" xyz="0 0 0" />
             <geometry>
                 <cylinder radius="0.036" length="0.0245" />
@@ -217,12 +230,18 @@
         <visual>
             <origin rpy="0 0 0" xyz="0 0 0" />
             <geometry>
-                <mesh filename="package://qcar_updated/models/qcar/QCarWheel.stl"
+                <mesh filename="file://$(find qcar_navigation)/meshes/QCarWheel.stl"
                     scale="0.001 0.001 0.001" />
             </geometry>
             <material name="red" />
         </visual>
         <collision>
+            <!-- gazebo_ros_ackermann_drive auto-computes wheel radius from the
+                 collision shape but only supports cylinder/sphere primitives -
+                 an STL mesh collision here makes it silently use radius 0,
+                 which divides target_linear by zero and the car never drives.
+                 Use a cylinder sized to the wheel mesh (radius 0.033m) instead,
+                 keeping the STL for the visual only. -->
             <origin rpy="1.5708 0 0" xyz="0 0 0" />
             <geometry>
                 <cylinder radius="0.036" length="0.0245" />
@@ -234,25 +253,6 @@
             <inertia ixx="0.0012" ixy="0" ixz="0" iyy="0.0022" iyz="0" izz="0.0012" />
         </inertial>
     </link>
-
-    <!-- wheel-ground friction - without this the wheels spin freely with 100%
-         slip and the chassis never translates, regardless of PID gains -->
-    <gazebo reference="wheelfl">
-        <mu1>1.0</mu1>
-        <mu2>1.0</mu2>
-    </gazebo>
-    <gazebo reference="wheelfr">
-        <mu1>1.0</mu1>
-        <mu2>1.0</mu2>
-    </gazebo>
-    <gazebo reference="wheelrl">
-        <mu1>1.0</mu1>
-        <mu2>1.0</mu2>
-    </gazebo>
-    <gazebo reference="wheelrr">
-        <mu1>1.0</mu1>
-        <mu2>1.0</mu2>
-    </gazebo>
 
     <joint name="camera_rgb_joint" type="fixed">
         <!-- <axis xyz="0 1 0" /> -->
@@ -304,6 +304,28 @@
     </joint>
     <link name="camera_csi_left" />
 
+    <!-- Explicit high friction for the drive/steer wheels - without this the
+         ackermann plugin can spin the wheel joints at exactly the commanded
+         angular velocity (confirmed via debug logging) while the chassis
+         never actually translates, since URDF collisions get no friction
+         surface unless one is set here. -->
+    <gazebo reference="wheelfl">
+        <mu1>1.0</mu1>
+        <mu2>1.0</mu2>
+    </gazebo>
+    <gazebo reference="wheelfr">
+        <mu1>1.0</mu1>
+        <mu2>1.0</mu2>
+    </gazebo>
+    <gazebo reference="wheelrl">
+        <mu1>1.0</mu1>
+        <mu2>1.0</mu2>
+    </gazebo>
+    <gazebo reference="wheelrr">
+        <mu1>1.0</mu1>
+        <mu2>1.0</mu2>
+    </gazebo>
+
     <gazebo reference="camera_csi_front">
         <sensor type="camera" name="front_camera">
             <update_rate>30.0</update_rate>
@@ -342,12 +364,14 @@
             <max_steer>0.5236</max_steer>
             <max_speed>20</max_speed>
 
-            <!-- PID tuning: the upstream demo's gains (1500/1000) were tuned for a
-                 full-size car and are ~1000x too aggressive for this vehicle's wheel
-                 inertia, causing an immediate physics blowup (confirmed by testing).
-                 0.3/0/0.02 steering gain still destabilized the sim (gzserver crash
-                 in Ogre::AxisAlignedBox::setExtents) even with the wheel inertia bump
-                 above - these lower values are confirmed stable. -->
+            <!-- PID tuning: this vehicle's wheel/steering-hub rotational inertia is tiny
+                 relative to a 100Hz control loop, so this is a genuinely stiff system -
+                 even modest P gains here can diverge (confirmed: wheel joint velocity
+                 goes NaN within ~1s at gain 1.0, and the resulting Ogre bounding-box
+                 assertion kills gzserver). These low gains are stability-verified and
+                 reach the commanded wheel speed within ~1s; retune upward with care and
+                 always verify gzserver survives a sustained forward command before
+                 trusting a new value. -->
             <left_steering_pid_gain>0.02 0 0.002</left_steering_pid_gain>
             <left_steering_i_range>0 0</left_steering_i_range>
             <right_steering_pid_gain>0.02 0 0.002</right_steering_pid_gain>

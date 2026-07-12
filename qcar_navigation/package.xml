@@ -1,0 +1,35 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>qcar_navigation</name>
+  <version>0.0.1</version>
+  <description>Gazebo simulation, mapping (SLAM) and Nav2 navigation bringup for the Quanser QCar2</description>
+  <maintainer email="amit.sajeev@stud.th-deg.de">amitsajeev_byte</maintainer>
+  <license>BSD</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <exec_depend>xacro</exec_depend>
+  <exec_depend>robot_state_publisher</exec_depend>
+  <exec_depend>joint_state_publisher</exec_depend>
+  <!-- Jazzy used ros_gz_sim + ros_gz_bridge (gz-sim stack). Humble uses classic
+       Gazebo 11 via gazebo_ros (spawn_entity.py, gzserver/gzclient launch files)
+       and gazebo_plugins (the actual .so plugins referenced in the URDF: ackermann
+       drive, ray lidar, IMU, joint state publisher). No bridge package is needed
+       since these plugins publish ROS topics natively. -->
+  <exec_depend>gazebo_ros</exec_depend>
+  <exec_depend>gazebo_plugins</exec_depend>
+  <exec_depend>gazebo_ros_pkgs</exec_depend>
+  <exec_depend>rviz2</exec_depend>
+  <exec_depend>slam_toolbox</exec_depend>
+  <exec_depend>nav2_bringup</exec_depend>
+  <exec_depend>nav2_map_server</exec_depend>
+  <exec_depend>teleop_twist_keyboard</exec_depend>
+
+  <test_depend>ament_lint_auto</test_depend>
+  <test_depend>ament_lint_common</test_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

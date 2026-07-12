@@ -6,7 +6,6 @@ from launch.actions import TimerAction
 from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
-from launch_ros.actions import Node
 
 
 def generate_launch_description():
@@ -35,16 +34,6 @@ def generate_launch_description():
         TimerAction(
             period=3.0,
             actions=[
-
-                # cmd_vel -> ackermann_steering_controller reference
-                Node(
-                    package='topic_tools',
-                    executable='relay',
-                    name='cmd_vel_relay',
-                    arguments=['/cmd_vel', '/ackermann_steering_controller/reference_unstamped'],
-                    output='screen',
-                    parameters=[{'use_sim_time': True}]
-                ),
 
                 IncludeLaunchDescription(
                     PythonLaunchDescriptionSource(

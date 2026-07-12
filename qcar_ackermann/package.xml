@@ -1,28 +1,25 @@
 <?xml version="1.0"?>
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
-  <name>qcar_updated</name>
-  <version>0.0.0</version>
+  <name>qcar_ackermann</name>
+  <version>0.0.1</version>
   <description>TODO: Package description</description>
-  <maintainer email="amit@todo.todo">amit</maintainer>
+  <maintainer email="amitsajeev@gmail.com">amit</maintainer>
   <license>TODO: License declaration</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
 
-  <depend>xacro</depend>
-  <depend>robot_state_publisher</depend>
-
-  <exec_depend>rclpy</exec_depend>
-  <exec_depend>geometry_msgs</exec_depend>
-  <exec_depend>joint_state_publisher</exec_depend>
   <exec_depend>gazebo_ros</exec_depend>
   <exec_depend>gazebo_plugins</exec_depend>
-  <exec_depend>nav2_bringup</exec_depend>
+  <exec_depend>robot_state_publisher</exec_depend>
+  <exec_depend>joint_state_publisher</exec_depend>
+  <exec_depend>xacro</exec_depend>
+  <exec_depend>teleop_twist_keyboard</exec_depend>
   <exec_depend>cartographer_ros</exec_depend>
+  <exec_depend>nav2_bringup</exec_depend>
+  <exec_depend>nav2_map_server</exec_depend>
   <exec_depend>rviz2</exec_depend>
-
-  <test_depend>ament_lint_auto</test_depend>
-  <test_depend>ament_lint_common</test_depend>
+  <exec_depend>xterm</exec_depend>
 
   <export>
     <build_type>ament_cmake</build_type>
