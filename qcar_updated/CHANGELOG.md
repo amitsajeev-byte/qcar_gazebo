@@ -1,5 +1,72 @@
 # Changelog
 
+## 2026-07-13 - Migrate from `ackermann_steering_controller` to `libgazebo_ros_ackermann_drive`, fix "not moving" / "not reaching goal"
+
+Replaced the `ros2_control`-based `ackermann_steering_controller` (and its `controller_manager`
+spawners and `topic_tools relay` bridges) with the `gazebo_ros_ackermann_drive` Gazebo plugin,
+declared directly in `urdf/qcar_model.xacro`'s `<gazebo>` block - same approach already used by
+the sibling package `qcar_navigation`. The plugin subscribes to `/cmd_vel` and publishes `/odom`
+and the `odom -> base` TF natively, so no relay nodes or controller manager are needed.
+
+### Changed
+- **`urdf/qcar_model.xacro`**: removed the `<ros2_control>` block and its `libgazebo_ros2_control`
+  plugin; added the `gazebo_ros_ackermann_drive` plugin block (front/rear/steering joint mapping,
+  `max_steer`/`max_speed`, PID gains, odometry/TF publishing flags). Replaced each wheel's
+  `<collision>` (previously the visual STL mesh) with a `<cylinder radius="0.036"
+  length="0.0245"/>` - the plugin's wheel-radius auto-detection only supports cylinder/sphere
+  collisions, and a mesh collision silently reads `wheel_radius_=0`, poisoning the velocity PID
+  entirely (this is why the robot didn't move at all after the initial migration). Added
+  `<mu1>1.0</mu1><mu2>1.0</mu2>` friction to all 4 wheel links (previously zero friction
+  anywhere, causing 100% wheel slip with zero real motion even once the radius bug was fixed).
+  Bumped wheel rotational inertia from `ixx=izz=0.0000645, iyy=0.0001089` to
+  `ixx=izz=0.0012, iyy=0.0022` - the original tiny inertia caused an intermittent
+  `Ogre::AxisAlignedBox::setExtents` assertion crash in gzserver under normal steering PID load.
+- **`worlds/myworld.world`**: fixed the ground plane's `<friction><ode><mu>100</mu><mu2>50</mu2>`
+  down to `mu=1 mu2=1` - the original absurd value, combined with a now-working wheel contact,
+  caused a physics blow-up.
+- **`left/right_steering_pid_gain`**: initially set to `0.02 0 0.002` (copied from
+  `qcar_navigation`'s equivalent fix), but that value was tuned for a robot with zero wheel
+  friction. Once wheel friction was added (above), turning the front hubs against a gripping,
+  rolling tire needed real torque that `kp=0.02` couldn't supply - measured via direct `tf2`
+  lookups on `base -> hubfl`/`hubfr` that the hub only reached ~1 deg of an ~15 deg commanded
+  steering angle. This silently made the car's real turning radius ~6x larger than commanded,
+  causing Nav2's path-tracking controller to be unable to follow any planned turn accurately.
+  Raised to `3.0 0 0.1`, re-verified to converge to the correct Ackermann inner/outer wheel angle
+  split for a given commanded turning radius.
+- **`launch/qcar_updated.launch.py`**: removed the `joint_state_broadcaster`/
+  `ackermann_steering_controller` spawner nodes and the `odom_relay`/`odom_tf_relay`
+  `topic_tools relay` nodes (no longer needed - the plugin publishes `/odom` and `odom -> base`
+  directly). `robot_description` is now built via a `Command(['xacro ', ...])` substitution
+  instead of `xacro.process_file(...).toxml()` at launch-description-generation time.
+- **`launch/qcar_nav2.launch.py`** / **`launch/qcar_slam.launch.py`**: removed the `cmd_vel_relay`
+  `topic_tools relay` node (the plugin subscribes to `/cmd_vel` directly, no bridging needed).
+- **`package.xml`**: removed `controller_manager`, `joint_state_broadcaster`,
+  `ackermann_steering_controller`, `topic_tools`, `gazebo_ros2_control`; added `gazebo_plugins`.
+
+### Removed
+- `config/qcar_controllers.yaml`, `config/qcar_controllers_slam_override.yaml` - `ros2_control`
+  controller manager configs, no longer used.
+
+### Known limitations
+- **`disable_odom_tf` launch argument is currently a no-op.** It's still declared in
+  `qcar_updated.launch.py` and passed through to `xacro`, and `qcar_slam.launch.py` still passes
+  `disable_odom_tf:=true` expecting it to suppress the drive plugin's own `odom -> base`
+  broadcast during SLAM (so Cartographer is the sole broadcaster). But
+  `urdf/qcar_model.xacro` never reads a `disable_odom_tf` property anywhere, and the plugin's
+  `publish_odom_tf` is hardcoded `true` - so in SLAM mode both Cartographer and the plugin now
+  publish `odom -> base`, fighting over the same TF edge. Needs an `xacro:arg`-gated
+  `publish_odom_tf` value if SLAM mode is exercised again.
+- **`/joint_states` is self-referential and always reports zero.** `joint_state_publisher` in
+  `qcar_updated.launch.py` is configured with `source_list: ['/joint_states']` - its own output
+  topic - so it just republishes its own default zero state rather than real wheel angles. Doesn't
+  affect physics or Nav2 (the plugin publishes real wheel/steering TF separately via
+  `publish_wheel_tf`), but any tooling that reads `/joint_states` directly for wheel angles will
+  see stale zeros; use TF (`base -> wheelXX`/`hubXX`) instead.
+- End-to-end verified via a real Nav2 run (headless gzserver + AMCL + planner + controller,
+  goal requiring both straight driving and a turn) - `bt_navigator` logged `Reached the goal!` /
+  `Goal succeeded`. See `TUNING.md` for further accuracy-tuning parameters if goal-reaching
+  precision still isn't satisfactory for a given map/goal.
+
 ## 2026-07-05 - Migrate from JointGroup controllers to `ackermann_steering_controller`
 
 Replaced the hand-rolled drive stack (two independent `ros2_control` controllers plus a
