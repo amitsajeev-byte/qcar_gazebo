@@ -45,7 +45,7 @@ source install/setup.bash
 | `launch/qcar_slam.launch.py` | Mapping: Cartographer SLAM (includes the sim by default) |
 | `launch/qcar_nav2.launch.py` | Navigation: Nav2 stack against a saved map (includes the sim by default) |
 | `config/cartographer/qcar_2d.lua` | Cartographer SLAM parameters |
-| `config/nav2/nav2_params.yaml` | Nav2 stack parameters (AMCL, costmaps, planner, controller) - see `TUNING.md` for a per-parameter accuracy-tuning reference |
+| `config/nav2/nav2_params.yaml` | Nav2 stack parameters (AMCL, costmaps, planner, controller) - see `config/nav2/PARAMS_REFERENCE.md` for a full per-parameter explanation, or `TUNING.md` for the accuracy-tuning subset |
 | `maps/qcar_map.yaml` / `.pgm` | Saved occupancy grid map used by `qcar_nav2.launch.py` |
 | `scripts/qcar_teleop_twist.py` | Keyboard teleop publishing `/cmd_vel` |
 | `worlds/*.world` | Gazebo worlds (`myworld.world` is used by default; others available for manual swap) |
