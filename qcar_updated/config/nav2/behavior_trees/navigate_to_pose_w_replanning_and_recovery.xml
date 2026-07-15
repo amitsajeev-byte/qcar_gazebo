@@ -1,0 +1,52 @@
+<!--
+  Adapted from the stock nav2_bt_navigator tree navigate_to_pose_w_replanning_and_recovery.xml -
+  identical except for one change: removed <Spin> from RecoveryActions, since a pure in-place
+  rotation is physically impossible for this Ackermann car (steering has no effect at zero
+  linear velocity), so it was a guaranteed no-op recovery attempt that just burned its timeout.
+
+  Two other changes were tried here and reverted - documented so they aren't retried blindly:
+
+  1. Switching to "replan only if the path becomes invalid" (based on the stock
+     navigate_w_recovery_and_replanning_only_if_path_becomes_invalid.xml). Real bug in this nav2
+     version: IsPathValid returns SUCCESS on the default-constructed/empty {path} blackboard
+     entry before ComputePathToPose has ever run, so the Fallback skips ComputePathToPose
+     entirely and FollowPath receives an empty path forever ("Resulting plan has 0 poses in it",
+     "Controller patience exceeded", eventual navigation failure - confirmed via direct testing).
+
+  2. Lowering RateController hz from 1.0 to 0.2 (replan every 5s), to reduce goal-approach
+     oscillation with allow_reversing:true. This made real-world behavior worse, not better:
+     confirmed via a live user test that with the slower rate, each "Failed to make progress"
+     abort/retry cycle (see nav2_params.yaml's progress_checker - that was the actual root cause,
+     not replanning rate) now has to wait up to 5s for the next scheduled path before it can even
+     attempt to move again, turning what should be a quick retry into a 3+ minute stall cycling
+     through recovery behaviors. Reverted to the stock 1.0 hz, which is proven to work.
+-->
+<root main_tree_to_execute="MainTree">
+  <BehaviorTree ID="MainTree">
+    <RecoveryNode number_of_retries="6" name="NavigateRecovery">
+      <PipelineSequence name="NavigateWithReplanning">
+        <RateController hz="1.0">
+          <RecoveryNode number_of_retries="1" name="ComputePathToPose">
+            <ComputePathToPose goal="{goal}" path="{path}" planner_id="GridBased"/>
+            <ClearEntireCostmap name="ClearGlobalCostmap-Context" service_name="global_costmap/clear_entirely_global_costmap"/>
+          </RecoveryNode>
+        </RateController>
+        <RecoveryNode number_of_retries="1" name="FollowPath">
+          <FollowPath path="{path}" controller_id="FollowPath"/>
+          <ClearEntireCostmap name="ClearLocalCostmap-Context" service_name="local_costmap/clear_entirely_local_costmap"/>
+        </RecoveryNode>
+      </PipelineSequence>
+      <ReactiveFallback name="RecoveryFallback">
+        <GoalUpdated/>
+        <RoundRobin name="RecoveryActions">
+          <Sequence name="ClearingActions">
+            <ClearEntireCostmap name="ClearLocalCostmap-Subtree" service_name="local_costmap/clear_entirely_local_costmap"/>
+            <ClearEntireCostmap name="ClearGlobalCostmap-Subtree" service_name="global_costmap/clear_entirely_global_costmap"/>
+          </Sequence>
+          <Wait wait_duration="5"/>
+          <BackUp backup_dist="0.30" backup_speed="0.05"/>
+        </RoundRobin>
+      </ReactiveFallback>
+    </RecoveryNode>
+  </BehaviorTree>
+</root>

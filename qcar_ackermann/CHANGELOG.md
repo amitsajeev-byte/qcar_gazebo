@@ -1,121 +1,5 @@
 # Changelog
 
-## 2026-07-14 (3) - Real fix for goal-approach oscillation: `progress_checker` was aborting mid-maneuver
-
-Follow-up to the entry below (2). The replanning-rate slowdown did not fix the oscillation - user
-shared the live launch terminal output and it showed the true cause: repeated
-`[controller_server]: Failed to make progress` / `[follow_path] [ActionServer] Aborting handle`
-cycling for 3+ minutes through `wait`/`backup` recovery behaviors. Checked
-`nav2_controller::SimpleProgressChecker`'s header
-(`/opt/ros/humble/include/nav2_controller/plugins/simple_progress_checker.hpp`) directly: this
-Humble-era version only stores a single `radius_` member and judges progress by **linear
-displacement alone** - `required_angular_distance` (already set in this file) is not implemented
-until a later nav2 release and is silently ignored here. During a heading-correction maneuver
-near the goal (especially with `allow_reversing: true`, which does small forward/reverse
-micro-moves), net linear displacement stays under the old `required_linear_distance: 0.5` within
-the default ~10s `movement_time_allowance`, so the checker judged the robot "stuck" and aborted
-the maneuver before it could complete - repeatedly, since every retry hit the same wall.
-
-### Changed
-- **`config/nav2/nav2_params.yaml`**: `controller_server.progress_checker.required_linear_distance`
-  lowered from `0.5` to `0.1`; added `movement_time_allowance: 30.0` explicitly (previously
-  relying on the plugin's default, undocumented in this file). Added an inline comment
-  explaining the `required_angular_distance` no-op gotcha for future reference.
-- **Reverted the (2) replanning-rate change** in both
-  `config/nav2/behavior_trees/navigate_{to_pose,through_poses}_w_replanning_and_recovery.xml` -
-  `RateController hz` back to the stock `1.0`/`0.333`. That slowdown wasn't the fix and made the
-  actual problem worse: each "Failed to make progress" abort/retry now had to wait up to 5s for
-  the next scheduled path before attempting to move again, stretching what should be a quick
-  retry into part of that observed 3+ minute stall. `<Spin>` remains removed from recovery in
-  both files (that part was correct and unrelated to this issue).
-
-### Known limitation
-- Not independently re-verified by Claude - the user is testing directly via their own running
-  `qcar_nav2.launch.py` session and sharing terminal output; this fix is based on that shared log
-  plus direct inspection of the `SimpleProgressChecker` header, not a fresh live test in this
-  session. Needs a relaunch to pick up the new params and one more goal test to confirm.
-
-## 2026-07-14 (2) - Reduce replanning rate to fix repeated oscillation with `allow_reversing: true`
-
-Follow-up to the entry below. User set `allow_reversing: true` in `nav2_params.yaml` (their own
-change, expected to let the controller use a reverse maneuver to correct final heading in tight
-spaces) and reported the robot now oscillates *multiple times* - forward swings, then reverse
-attempts - before finally settling, worse than before. Root cause: `allow_reversing` didn't
-remove the actual problem (see the entry below - `bt_navigator`'s `RateController` still
-recomputes the global path every 1s, continuously, even while the robot is stationary and just
-correcting its heading near the goal). It just gave the controller a second degree of freedom
-(forward vs. reverse) to flip-flop on each time a fresh 1Hz replan nudged the path's implied
-approach angle, instead of committing to one clean correction.
-
-### Changed
-- **`config/nav2/behavior_trees/navigate_to_pose_w_replanning_and_recovery.xml`**: `RateController
-  hz` lowered from `1.0` to `0.2` (replan every 5s instead of every 1s).
-- **`config/nav2/behavior_trees/navigate_through_poses_w_replanning_and_recovery.xml`**: `RateController
-  hz` lowered from `0.333` to `0.15` (replan roughly every 7s instead of every 3s), for
-  consistency with the above.
-
-Deliberately a rate change only, not a restructuring of the replan-trigger logic - see the
-"Tried and reverted" note in the entry below for why a conditional (`IsPathValid`-based)
-restructuring is considered too risky to reattempt right now given a real bug already found in
-that approach in this nav2 version.
-
-### Known limitation
-- Not re-verified live in this session - the user has their own `qcar_nav2.launch.py` instance
-  running with a real display/GUI while this change was made, so it was rebuilt but not
-  relaunched to avoid disrupting their active session. Needs a restart of that launch to pick up
-  the new behavior tree files, and a fresh goal test to confirm the oscillation is actually
-  reduced.
-
-## 2026-07-14 - Fix goal-approach orientation-correction wobble, remove infeasible `<Spin>` recovery
-
-User reported: robot reaches the goal *position* but then swings away from it and back while
-correcting its final *orientation* - not a smooth in-place-feeling correction. Root cause:
-`qcar_nav2.launch.py` never set a custom behavior tree, so `bt_navigator` used its compiled-in
-default (`navigate_to_pose_w_replanning_and_recovery.xml`), which replans the entire global path
-every second, continuously, for the whole navigation - including after the robot has already
-reached the goal position but before its heading satisfies `yaw_goal_tolerance`. Since
-`NavfnPlanner` has no concept of the robot's current heading, and `use_rotate_to_heading: false`
-(correctly, since this Ackermann car can't rotate in place), each fresh 1Hz replan near the goal
-could demand a different arrival heading, forcing the car to swing out and back repeatedly to
-chase it.
-
-### Changed
-- **`config/nav2/behavior_trees/navigate_to_pose_w_replanning_and_recovery.xml`** /
-  **`navigate_through_poses_w_replanning_and_recovery.xml`** (new): local copies of the stock
-  nav2-shipped default trees, identical except `<Spin>` removed from `RecoveryActions` - a pure
-  in-place rotation is physically impossible for this car (steering has no effect at zero linear
-  velocity), so it was a guaranteed no-op recovery attempt that just burned its timeout each time
-  it came up in the round-robin.
-- **`launch/qcar_nav2.launch.py`**: wraps `nav2_params.yaml` in `RewrittenYaml` to set
-  `default_nav_to_pose_bt_xml` / `default_nav_through_poses_bt_xml` to the two new local files.
-- **`config/nav2/nav2_params.yaml`**: added the placeholder `default_nav_to_pose_bt_xml: ""` /
-  `default_nav_through_poses_bt_xml: ""` keys under `bt_navigator` (required for `RewrittenYaml`
-  to have something to overwrite - it only rewrites existing keys, doesn't add new ones). Raised
-  `general_goal_checker.yaw_goal_tolerance` from `0.7` to `1.0` rad, to reduce how often a
-  correction maneuver triggers at all.
-- **`package.xml`**: added `nav2_common` (imported directly by `qcar_nav2.launch.py` for
-  `RewrittenYaml`; was previously only a transitive dependency via `nav2_bringup`).
-
-### Tried and reverted (documented in case this is revisited)
-- Attempted swapping to nav2's stock "replan only if the path becomes invalid" alternate tree
-  (`navigate_w_recovery_and_replanning_only_if_path_becomes_invalid.xml`) instead of just
-  removing `<Spin>`, to eliminate the continuous 1Hz replanning at its source rather than just
-  tolerating its effect via a looser yaw tolerance. **This has a real bug** in this nav2/Humble
-  version: `IsPathValid` returns SUCCESS on the default-constructed/empty `{path}` blackboard
-  entry before `ComputePathToPose` has ever run, so the `Fallback` wrapping them skips
-  `ComputePathToPose` entirely and `FollowPath` receives an empty path forever - confirmed via a
-  live headless test (`Resulting plan has 0 poses in it`, `Controller patience exceeded`
-  repeating until all recovery retries were exhausted, `Goal failed`). Reverted to the stock
-  continuous-replanning structure (proven working end-to-end in this package) with only `<Spin>`
-  removed.
-
-### Known limitation
-- The final BT + `yaw_goal_tolerance` combination above was not re-verified live end-to-end after
-  the revert - the local test sandbox degraded after many repeated heavy launches in one session
-  (stale FastRTPS shared-memory segments, DDS daemon losing track of nodes) to the point of
-  timing out on basic `ros2` CLI commands, unrelated to the config itself. Verify with a real
-  `ros2 launch qcar_updated qcar_nav2.launch.py` + goal send before trusting this fully.
-
 ## 2026-07-13 - Migrate from `ackermann_steering_controller` to `libgazebo_ros_ackermann_drive`, fix "not moving" / "not reaching goal"
 
 Replaced the `ros2_control`-based `ackermann_steering_controller` (and its `controller_manager`
@@ -149,7 +33,7 @@ and the `odom -> base` TF natively, so no relay nodes or controller manager are 
   causing Nav2's path-tracking controller to be unable to follow any planned turn accurately.
   Raised to `3.0 0 0.1`, re-verified to converge to the correct Ackermann inner/outer wheel angle
   split for a given commanded turning radius.
-- **`launch/qcar_updated.launch.py`**: removed the `joint_state_broadcaster`/
+- **`launch/qcar_ackermann.launch.py`**: removed the `joint_state_broadcaster`/
   `ackermann_steering_controller` spawner nodes and the `odom_relay`/`odom_tf_relay`
   `topic_tools relay` nodes (no longer needed - the plugin publishes `/odom` and `odom -> base`
   directly). `robot_description` is now built via a `Command(['xacro ', ...])` substitution
@@ -165,7 +49,7 @@ and the `odom -> base` TF natively, so no relay nodes or controller manager are 
 
 ### Known limitations
 - **`disable_odom_tf` launch argument is currently a no-op.** It's still declared in
-  `qcar_updated.launch.py` and passed through to `xacro`, and `qcar_slam.launch.py` still passes
+  `qcar_ackermann.launch.py` and passed through to `xacro`, and `qcar_slam.launch.py` still passes
   `disable_odom_tf:=true` expecting it to suppress the drive plugin's own `odom -> base`
   broadcast during SLAM (so Cartographer is the sole broadcaster). But
   `urdf/qcar_model.xacro` never reads a `disable_odom_tf` property anywhere, and the plugin's
@@ -173,7 +57,7 @@ and the `odom -> base` TF natively, so no relay nodes or controller manager are 
   publish `odom -> base`, fighting over the same TF edge. Needs an `xacro:arg`-gated
   `publish_odom_tf` value if SLAM mode is exercised again.
 - **`/joint_states` is self-referential and always reports zero.** `joint_state_publisher` in
-  `qcar_updated.launch.py` is configured with `source_list: ['/joint_states']` - its own output
+  `qcar_ackermann.launch.py` is configured with `source_list: ['/joint_states']` - its own output
   topic - so it just republishes its own default zero state rather than real wheel angles. Doesn't
   affect physics or Nav2 (the plugin publishes real wheel/steering TF separately via
   `publish_wheel_tf`), but any tooling that reads `/joint_states` directly for wheel angles will
@@ -196,7 +80,7 @@ Ackermann inverse kinematics and wheel odometry natively.
   `ackermann_steering_controller` (`ackermann_steering_controller/AckermannSteeringController`)
   configured with `front_steering: true`, the measured wheelbase/track/radius values, and
   `enable_odom_tf: true` so it publishes its own `odom -> base` transform.
-- **`launch/qcar_updated.launch.py`**: replaced the `drive_controller`/`steering_controller`
+- **`launch/qcar_ackermann.launch.py`**: replaced the `drive_controller`/`steering_controller`
   spawner nodes with one `ackermann_steering_controller` spawner; added a `disable_odom_tf`
   launch argument (default `false`) that, when true, spawns the controller with an extra
   `-p config/qcar_controllers_slam_override.yaml` so it doesn't broadcast `odom -> base` (used
@@ -210,7 +94,7 @@ Ackermann inverse kinematics and wheel odometry natively.
 - **`launch/qcar_nav2.launch.py`** / **`launch/qcar_slam.launch.py`**: replaced the
   `cmd_vel_to_drive.py` node with a `topic_tools relay` from `/cmd_vel` to
   `/ackermann_steering_controller/reference_unstamped`. `qcar_slam.launch.py` now includes
-  `qcar_updated.launch.py` with `disable_odom_tf:=true`, since Cartographer
+  `qcar_ackermann.launch.py` with `disable_odom_tf:=true`, since Cartographer
   (`provide_odom_frame: true` in `qcar_2d.lua`) must be the sole `odom -> base` broadcaster.
 - **`urdf/qcar_model.xacro`**: removed the `gazebo_ros_p3d` ground-truth odometry plugin
   (`/odom` is now the controller's real wheel odometry, not a perfect ground-truth feed). Fixed
@@ -237,7 +121,7 @@ Ackermann inverse kinematics and wheel odometry natively.
 - **Launch argument name collision**: the first attempt at the `disable_odom_tf` argument above
   was named `slam`, which collides with `nav2_bringup`'s own `slam` launch argument (used
   internally by `bringup_launch.py` for its own localization-vs-SLAM branching). Because
-  `qcar_nav2.launch.py` includes `qcar_updated.launch.py` before including nav2's bringup, the
+  `qcar_nav2.launch.py` includes `qcar_ackermann.launch.py` before including nav2's bringup, the
   lowercase `default_value='false'` won the shared launch-context lookup, and nav2's
   `PythonExpression(['not ', slam])` then evaluated `eval("not false")` - a `NameError`, since
   Python needs the capitalized `False`. This crashed the whole launch and took the nav2
