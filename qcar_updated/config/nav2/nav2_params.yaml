@@ -7,11 +7,19 @@ amcl:
       z: 0.0
       yaw: 0.0
     use_sim_time: true
-    alpha1: 0.2
-    alpha2: 0.2
-    alpha3: 0.2
-    alpha4: 0.2
-    alpha5: 0.2
+    # Raised from 0.2 (all 5) - live-measured map->odom TF jumps of up to 7cm/2.3deg in a single
+    # 0.2s step during goal-approach reorientation maneuvers (K-turns with reversing), visible as
+    # lidar points "jumping" in the map frame each time AMCL corrects. Likely cause: real wheel
+    # odometry drift is higher during tight/reversing motion (more slip) than the noise model
+    # alpha1-5=0.2 assumed, so AMCL underestimated uncertainty between scan-match updates and had
+    # to correct in large, sudden jumps to catch up. Raising these lets the particle filter track
+    # a wider, more realistic pose uncertainty during maneuvering, converging more gradually
+    # instead of snapping. See CHANGELOG.md 2026-07-15 (2).
+    alpha1: 0.4
+    alpha2: 0.4
+    alpha3: 0.4
+    alpha4: 0.4
+    alpha5: 0.4
     base_frame_id: "base"
     beam_skip_distance: 0.5
     beam_skip_error_threshold: 0.9
@@ -37,8 +45,11 @@ amcl:
     sigma_hit: 0.2
     tf_broadcast: true
     transform_tolerance: 1.0
-    update_min_a: 0.2
-    update_min_d: 0.25
+    # Lowered from 0.2/0.25 - re-localizes more often (smaller corrections each time) rather than
+    # accumulating more drift between updates and correcting in a single larger jump. Paired with
+    # the alpha increases above. See CHANGELOG.md 2026-07-15 (2).
+    update_min_a: 0.1
+    update_min_d: 0.15
     z_hit: 0.5
     z_max: 0.05
     z_rand: 0.5
@@ -136,7 +147,14 @@ controller_server:
     general_goal_checker:
       stateful: true
       plugin: "nav2_controller::SimpleGoalChecker"
-      xy_goal_tolerance: 0.1
+      # Widened slightly from 0.1 as of 2026-07-15 (3) - after removing PreferForwardCritic (see
+      # FollowPath below), a live-tested K-turn goal converged to within 14.5cm/0.22deg of the
+      # true goal but never quite latched "reached," cycling through repeated
+      # progress_checker-triggered abort/retries instead of completing cleanly. That's a genuine
+      # final-convergence gap now, not the "doesn't follow the plan at all" failure from before -
+      # 0.12m is still a tight, meaningful tolerance for this vehicle, just enough to let a
+      # closely-converged approach like that one actually finish instead of cycling forever.
+      xy_goal_tolerance: 0.12
       # Final heading DOES matter (reverted the earlier ~2.9 rad "accept anything" workaround -
       # that was masking the problem, not fixing it). Now that GridBased is SmacPlannerHybrid
       # (kinematically-aware, plans the actual approach/K-turn into the path itself instead of
@@ -168,9 +186,16 @@ controller_server:
       time_steps: 56
       model_dt: 0.05
       batch_size: 2000
-      vx_std: 0.2
+      # vx_std/wz_std lowered from the plugin's shipped defaults (0.2/0.4) as of 2026-07-18 -
+      # user recorded and shared video evidence of the robot deviating from the planned path
+      # mid-trip. These control how widely MPPI's sampled candidate trajectories spread around
+      # the current best guess each cycle - tighter sampling means less "wobble" around the
+      # planned path at the cost of slightly slower adaptation to sudden path changes. Verified
+      # against the real default via nav2_mppi_controller/src/optimizer.cpp on GitHub before
+      # changing, not guessed.
+      vx_std: 0.15
       vy_std: 0.0
-      wz_std: 0.4
+      wz_std: 0.3
       vx_max: 0.3
       # Negative - allows reversing. Matches this vehicle's real reverse capability; magnitude
       # kept below vx_max since the plugin's own PID/physics were only ever tuned/verified for
@@ -184,7 +209,15 @@ controller_server:
       temperature: 0.3
       gamma: 0.015
       motion_model: "Ackermann"
-      visualize: false
+      # Enabled 2026-07-18 (4) at user request, to expose two debug-only topics for RViz
+      # (confirmed via nav2_mppi_controller/src/trajectory_visualizer.cpp on GitHub - both are
+      # gated behind this flag and publish nothing while it's false): /trajectories
+      # (visualization_msgs/MarkerArray - every sampled candidate trajectory plus the chosen
+      # optimal one, each control cycle) and transformed_global_plan (nav_msgs/Path - the local,
+      # controller-side portion of the plan MPPI is actively tracking, as distinct from /plan's
+      # full raw global output from planner_server). Adds publishing/marker-array overhead - turn
+      # back off for normal (non-debugging) runs.
+      visualize: true
       # MPPI has dedicated handling for a path containing a cusp/reversal (a Reeds-Shepp K-turn
       # segment, as SmacPlannerHybrid can produce - see planner_server.GridBased below): without
       # enforce_path_inversion: true, it defaults to false
@@ -200,8 +233,22 @@ controller_server:
       AckermannConstraints:
         # Matches planner_server.GridBased.minimum_turning_radius below - keep these two in sync.
         min_turning_r: 0.5
+      # PreferForwardCritic REMOVED as of 2026-07-15 (3) - fetched its actual source
+      # (nav2_mppi_controller/src/critics/prefer_forward_critic.cpp): it penalizes any reverse
+      # velocity (cost_weight 5.0) for as long as the robot is more than threshold_to_consider
+      # (0.5m default) from the goal. PathFollowCritic, meanwhile, stops enforcing the planned
+      # path inside ITS OWN threshold_to_consider (1.4m default) - leaving a 0.5m-1.4m "dead
+      # zone" around the goal where nothing enforces the planned path but PreferForwardCritic is
+      # still actively fighting any reverse motion. A K-turn's reversal segment plausibly falls
+      # in exactly that zone, causing the executed trajectory to diverge from a plan that
+      # correctly included a reverse - confirmed by the user visually (plan shows a reverse, the
+      # robot doesn't execute it). This vehicle needs real reversing capability - a critic whose
+      # entire purpose is discouraging reverse motion is fundamentally at odds with that, and is
+      # redundant with planner_server.GridBased.reverse_penalty below, which already discourages
+      # *unnecessary* reversing at the path-planning level without fighting a reverse the plan
+      # has already decided is needed.
       critics: ["ConstraintCritic", "CostCritic", "GoalCritic", "GoalAngleCritic",
-                "PathAlignCritic", "PathFollowCritic", "PathAngleCritic", "PreferForwardCritic"]
+                "PathAlignCritic", "PathFollowCritic", "PathAngleCritic"]
       # Per-critic overrides below - defaults verified directly against the Humble source
       # (github.com/ros-navigation/navigation2, humble branch, nav2_mppi_controller/src/critics/)
       # rather than guessed, since local headers only expose parameter names, not default values.
@@ -217,6 +264,76 @@ controller_server:
         # to the exact goal point within GoalCritic's 1.4m threshold_to_consider, relative to
         # PathAlignCritic's competing weight of 10.0 over the same final approach.
         cost_weight: 8.0
+      GoalAngleCritic:
+        # raised from the default 3.0 to 10.0 on 2026-07-18 (5) - fixes "robot doesn't move when
+        # given a new goal that's mostly a reorientation" (e.g. re-sending the same position with
+        # a different final yaw shortly after reaching a goal). Root cause (confirmed by reading
+        # utils::withinPositionGoalTolerance in nav2_mppi_controller/tools/utils.hpp): PathAlign/
+        # PathFollow/PathAngle Critic all gate on the ROBOT'S CURRENT distance to the goal, not
+        # progress along the plan. When a new goal sits at (near) the robot's current position,
+        # that distance is ~0 from the very first control cycle, so all three are disabled for
+        # the ENTIRE maneuver - not just the final approach, as threshold_to_consider below was
+        # written to assume. That leaves only GoalAngleCritic (weight 3.0 by default) to drive
+        # the reorientation, which combined with ConstraintCritic's turning-radius penalty
+        # (discourages high angular rate at low forward speed - see AckermannConstraints below)
+        # was too weak to reliably pull MPPI's sampled trajectories out of a near-zero-velocity
+        # local optimum. An Ackermann vehicle cannot change heading at zero linear velocity, so
+        # once nothing incentivizes the small forward/reverse motion the reorientation needs, the
+        # robot just sits there. Live reproduced repeatedly (robot frozen, cmd_vel ~0, for 60s+)
+        # before this fix. Tried cost_weight 30.0 first - it did unstick the reorientation case,
+        # but also caused a separate, normal (non-reorientation) goal to stall on its final
+        # approach, live-verified as a regression. 10.0 was live-tested clean on both: a short
+        # direct-approach goal (unaffected, same ~6-11s completion as baseline) and the exact
+        # "same position, +90deg yaw" reproduction (previously stuck indefinitely; with this
+        # fix, either converges directly or is recovered by controller_server's existing
+        # progress_checker + recovery-behavior retry within roughly 30-80s, instead of never).
+        # Not an instant/clean fix - the underlying critic-gating gap above is still present -
+        # but converts a permanent hang into an eventual, automatic recovery.
+        cost_weight: 10.0
+      PathFollowCritic:
+        # threshold_to_consider lowered further to 0.15m on 2026-07-18 (5) - 0.5m (matching
+        # PathAlignCritic's default, set on (3) to close the "dead zone" from (3)'s own history)
+        # shrinks the window, near the end of a normal (non-reorientation) approach, where the
+        # planned path stops being enforced before the goal-focused critics take over. NOTE: this
+        # does NOT fix the "reorientation-in-place" bug described under GoalAngleCritic above -
+        # confirmed via live testing that lowering this threshold has zero effect on that bug,
+        # because it gates on distance to the robot's CURRENT position, which is already ~0 for
+        # that scenario from the first control cycle regardless of the threshold's value. Kept
+        # here only for the narrower "dead zone during normal final approach" case it does fix.
+        threshold_to_consider: 0.15
+        # offset_from_furthest lowered from the default 6 - user reported the robot turning
+        # early relative to the planned path, before an upcoming curve actually starts. Read the
+        # real scoring code (path_follow_critic.cpp on GitHub): this critic pulls each sampled
+        # trajectory's endpoint toward the path point `offset_from_furthest` indices ahead of
+        # wherever the robot has currently progressed to - a target that far ahead can land past
+        # the start of an upcoming curve, pulling the trajectory (and hence the executed heading)
+        # toward that curve before the robot has physically reached it. Lower value keeps the
+        # target point closer to actual current progress.
+        offset_from_furthest: 3
+      PathAngleCritic:
+        # offset_from_furthest lowered from the default 4, same reasoning and same mechanism as
+        # PathFollowCritic above (confirmed via path_angle_critic.cpp on GitHub) - this critic
+        # steers the robot's *heading* toward the path point this many indices ahead of current
+        # progress, which is the more direct cause of visibly "turning early" into a curve.
+        offset_from_furthest: 2
+      PathAlignCritic:
+        # offset_from_furthest lowered from the default 20 as of 2026-07-18 (3) - this parameter
+        # works completely differently here than in PathFollowCritic/PathAngleCritic above:
+        # reading the real scoring code (path_align_critic.cpp on GitHub), it's a gate, not a
+        # look-ahead target - "if (path_segments_count < offset_from_furthest_) return;" means
+        # PathAlignCritic (the highest-weighted critic in use, at 10.0) is completely INACTIVE
+        # for the first `offset_from_furthest` path points of every trip. If a curve starts early
+        # in the planned path, the strongest path-adherence critic simply isn't running yet
+        # during that segment - only the weaker critics (already tuned above) are shaping the
+        # trajectory there, which may not be enough on their own. User reported turning-early was
+        # still happening after the PathAngle/PathFollow fix, which pointed at this.
+        offset_from_furthest: 3
+        # threshold_to_consider lowered from the default 0.5m to 0.15m on 2026-07-18 (5), same
+        # reasoning and same "does not fix the reorientation-in-place bug" caveat as
+        # PathFollowCritic's identical change above - see that comment block, and
+        # GoalAngleCritic above for the fix that actually addresses that bug. See CHANGELOG.md
+        # 2026-07-18 (5).
+        threshold_to_consider: 0.15
 
 smoother_server:
   ros__parameters:

@@ -1,5 +1,380 @@
 # Changelog
 
+## 2026-07-18 (6) - Investigated (not fixed): robot gets stuck when the path has a reverse-then-forward segment
+
+User reported the robot getting stuck when the planned path includes a reversal followed by
+continuing forward, with a screen recording (RViz top, terminal bottom) as evidence. **No changes
+committed to `nav2_params.yaml` for this entry** - investigated live via an isolated reproduction
+(separate `ROS_DOMAIN_ID` and `GAZEBO_MASTER_URI` from the user's own running session, to avoid
+interfering with it) but did not reach a confident fix within the investigation, at the user's
+choice to pause here rather than keep iterating live. Documenting findings so the investigation
+isn't lost.
+
+### Reproduced
+Live, repeatedly, using the existing K-turn benchmark goal `(2.0, 1.0, 179deg)` from a clean
+headless sim: `controller_server` cycles through repeated `Failed to make progress` ->
+`Aborting handle` -> recovery (clear costmaps / wait / backup) -> full replan, without ever
+reaching the goal (multiple attempts run 60-150s+ without success).
+
+### Ruled out as the cause
+Reverted all of this session's earlier (5) changes live
+(`GoalAngleCritic.cost_weight` back to `3.0`, `PathFollowCritic`/`PathAlignCritic.
+threshold_to_consider` back to `0.5`) and reproduced the identical failure - **this is a
+pre-existing issue, not a regression from (5)'s tuning.**
+
+### Root cause candidate (source-verified, not yet confirmed as complete)
+Read `nav2_mppi_controller/src/path_handler.cpp`: MPPI only ever tracks the path up to the first
+reversal/cusp (`utils::removePosesAfterFirstInversion`) until the robot satisfies
+`PathHandler::isWithinInversionTolerances` - **both** `inversion_xy_tolerance` (default `0.2`m)
+**and** `inversion_yaw_tolerance` (default `0.4`rad) simultaneously against the cusp pose - only
+then is the rest of the path released. Live-dumping `/plan` across several replan cycles showed
+`SmacPlannerHybrid` frequently inserting a *new*, small corrective reversal right at the start of
+each freshly (re)computed plan (not only the "real" K-turn deeper in the route) - plausibly
+because the robot's actual heading at replan time rarely matches the path tangent the planner
+assumes exactly. These small wiggles cover very little net linear distance, so
+`progress_checker.movement_time_allowance` (`30.0`s) times out, the BT
+(`navigate_to_pose_w_replanning_and_recovery.xml`) runs its recovery round-robin, and then
+replans from scratch - which tends to produce another small wiggle at the new start point,
+repeating the cycle. This dovetails with a previously-documented, only-partially-fixed issue
+already described in that BT XML's own comments (replanning interrupting an in-progress K-turn
+before it could finish) - today's finding is a related but distinct manifestation: the *retry
+after failure* path re-triggers the same problem, not just a too-fast periodic replan.
+
+### Tried live, did not fully resolve
+Loosened `inversion_xy_tolerance` / `inversion_yaw_tolerance` to `0.4`m / `0.8`rad live - the
+robot visibly made more net progress per attempt (advanced further from the start point across
+replans) but still did not reliably reach the goal within the test budget used. Not committed to
+the YAML since it's an incomplete fix and the tradeoffs (a looser cusp handoff) weren't fully
+characterized.
+
+### Next steps (not yet attempted)
+- Investigate `SmacPlannerHybrid` tuning to stop it generating start-of-plan corrective
+  reversals in the first place (more root-cause than loosening the MPPI-side tolerances) -
+  candidates: `analytic_expansion_ratio`, `angle_quantization_bins`, `cost_penalty`, or how it's
+  seeding the search from the robot's current heading.
+- Consider a BT-level change so a `Failed to make progress` abort near a cusp doesn't force a
+  full replan-from-scratch (which re-triggers a new wiggle) - e.g. distinguishing "stuck at a
+  cusp, keep trying the same plan a bit longer" from "genuinely stuck, replan."
+
+## 2026-07-18 (5) - Fix "robot doesn't move on a new goal that's mainly a reorientation"
+
+User reported the robot not moving when given a new nav goal shortly after reaching a previous
+one, particularly when the new goal mainly needs a heading correction (e.g. re-sending
+essentially the same position with a different final yaw). Reproduced live and repeatedly:
+`cmd_vel` converges to near-zero and stays there, heading frozen tens of degrees short of target,
+for 60s+ with no progress.
+
+### Root cause
+Read `utils::withinPositionGoalTolerance` (`nav2_mppi_controller/tools/utils.hpp`, used by
+`PathAlignCritic`, `PathFollowCritic`, and `PathAngleCritic`'s `threshold_to_consider` gate): it
+measures distance from the **robot's current pose** to the goal, not progress along the plan.
+When a new goal sits at (or very near) the robot's current position - which a "same position,
+new orientation" goal does by definition - that distance is ~0 from the very first control
+cycle, so all three of MPPI's path-adherence critics are disabled for the *entire* maneuver, not
+just the final approach. (Confirmed via `ComputePathToPose`: `SmacPlannerHybrid` does plan a real,
+sensible loop-back maneuver up to ~0.2m from the goal for this case - the plan is fine, nothing is
+enforcing it.) That leaves only `GoalAngleCritic` (default weight `3.0`) to drive the
+reorientation, competing against `ConstraintCritic`'s turning-radius penalty (which discourages
+high angular rate at low forward speed - exactly what a tight reorientation needs) under MPPI's
+per-timestep-independent noise sampling. In practice this combination frequently converges to a
+near-zero-velocity local optimum, and an Ackermann vehicle physically cannot change heading at
+zero linear velocity - so nothing ever kicks it out.
+
+### Changed
+- **`config/nav2/nav2_params.yaml`**: `controller_server.FollowPath.GoalAngleCritic.cost_weight`
+  raised from the default `3.0` to `10.0`, to strengthen the only critic still active in this
+  near-goal regime.
+- (Also corrected the reasoning previously logged in (5)'s predecessor edits to
+  `PathFollowCritic`/`PathAlignCritic.threshold_to_consider` - see `TUNING.md` - that change does
+  *not* fix this bug, since the gate is based on current-position-to-goal distance which starts at
+  ~0 for this scenario regardless of the threshold's value. It remains in place because it's
+  independently useful for a different, narrower "dead zone" during normal final approach.)
+
+### Live-verified
+Reproduced the failure repeatedly with a dedicated script (send goal A, wait for completion, wait
+3s, send goal B at the same resulting position with yaw +90deg) against a clean, freshly-launched
+headless sim each time - not a one-off. With the fix:
+- A short, normal (non-reorientation) goal completes in the same ~5-11s as before the change - no
+  regression on ordinary path-following.
+- The reorientation-only goal no longer hangs indefinitely. It either converges directly or is
+  unstuck by `controller_server`'s existing `progress_checker` + recovery-behavior retry loop
+  (each retry calls `Optimizer::reset()`, giving MPPI a fresh independent attempt).
+
+### Known limitation - not a complete, deterministic fix
+This is a genuine improvement, not a guarantee. Because the underlying critic-gating gap
+(described above) is unchanged, and MPPI's sampling is stochastic, the reorientation case still
+sometimes takes one or more progress-checker retry cycles (observed range: instant up to ~90s
+across repeated live trials) to resolve, and in at least one trial it exhausted the behavior
+tree's retry budget and failed outright even with this fix applied. Tried `cost_weight: 30.0`
+first - it did make the reorientation case converge faster and more directly, but live-testing
+also showed it degrading a separate, normal long-distance goal's final approach (oscillation, a
+`progress_checker` failure that a `10.0`-weighted run of the same goal did not trigger) - reverted
+for that reason. Separately tried lowering `progress_checker.movement_time_allowance` from `30.0`
+to `8.0` (faster retries) - live-tested, made the BT exhaust its retry count before recovering on
+one trial (outright `Goal failed`), so left at `30.0`. If more reliable behavior is needed, the
+next step would be a code-level fix (e.g. a dedicated in-place-reorientation behavior, or making
+these critics' `threshold_to_consider` path-progress-based instead of goal-distance-based) rather
+than further YAML tuning.
+
+## 2026-07-18 (4) - Enable MPPI debug visualization topics for RViz
+
+User asked which topic shows the "local" plan alongside `/plan` (the global path from
+`planner_server`). Checked `nav2_mppi_controller/src/trajectory_visualizer.cpp` on GitHub: MPPI
+publishes `/trajectories` (`visualization_msgs/MarkerArray` - every sampled candidate trajectory
+each control cycle plus the chosen optimal one) and `transformed_global_plan`
+(`nav_msgs/Path` - the local, controller-side portion of the plan MPPI is actively tracking,
+distinct from `/plan`'s full raw global output) - but both are gated behind `FollowPath.
+visualize`, which was `false`.
+
+### Changed
+- **`config/nav2/nav2_params.yaml`**: `controller_server.FollowPath.visualize` set to `true`.
+
+### Live-verified
+Confirmed both topics actually publish real data once enabled (not just advertised): `ros2 topic
+list` showed both `/trajectories` and `/transformed_global_plan`, and `ros2 topic echo --once` on
+each returned valid messages during an active goal (a populated `MarkerArray` under the
+"Candidate Trajectories" namespace, and a `Path` with a valid `odom`-frame header respectively).
+
+### Known limitation
+- Adds publishing/marker-array overhead on every control cycle - fine for debugging, but should
+  be turned back off (`visualize: false`) for normal, non-debugging runs if CPU/bandwidth ever
+  becomes a concern (not observed to be a problem in headless testing, but never measured under
+  load with RViz also subscribed and rendering).
+
+## 2026-07-18 (3) - Fix `PathAlignCritic`'s much larger blind spot: inactive for the first 20 path points of every trip
+
+Follow-up to (2). User reported the "turning early" symptom was still present after the
+`PathAngle`/`PathFollowCritic` `offset_from_furthest` fix, with a second video as evidence. Read
+`PathAlignCritic`'s actual scoring code (`path_align_critic.cpp`, `humble` branch) - its own
+`offset_from_furthest` (still at the default `20`, never touched in (2)) works completely
+differently than the other two critics' parameter of the same name: it's a gate, not a
+look-ahead target - `if (path_segments_count < offset_from_furthest_) return;` means
+`PathAlignCritic` (the highest-weighted critic in use, at `10.0`) is entirely inactive for the
+first 20 path points of every trip. If a curve starts early in the plan, the strongest
+path-adherence critic simply isn't running yet during that segment.
+
+### Changed
+- **`config/nav2/nav2_params.yaml`**: `FollowPath.PathAlignCritic.offset_from_furthest` lowered
+  from the default `20` to `3`.
+
+### Live-verified result
+Reran the same isolated forward-curve goal (1.5, 1.5, 90deg, no reversal) used in (2) for a clean
+before/after: max path deviation `0.123m -> 0.091m -> 0.083m` across the (2) and (3) fixes
+respectively - measurably, consistently tighter each round. Captured the full raw per-sample
+heading-lead trace this time (not just aggregate stats): every single sample stayed under 9cm
+from the path. The "lead" values follow a sawtooth pattern - growing to 20-32deg then snapping
+back near zero, repeating roughly every 5s, a cadence matching the planner's replanning cycle
+(`max_planning_time: 5.0` s) rather than a persistent tracking failure. Some heading lead while
+banking into an ongoing curve is normal anticipatory steering, not inherently a bug - a vehicle
+tracking a curve well naturally points somewhat ahead of the exact instantaneous local tangent.
+
+### Confirmed resolved by the user
+Both videos were actually RViz (not Gazebo's motion-trail feature as Claude initially assumed),
+and the green line in both was the real `/plan` topic (the planner's output), not a ground-truth
+trail - correcting an earlier misreading of the visual evidence. With that corrected
+understanding, the frames examined during this investigation (robot visibly offset from the
+green `/path` line, e.g. cutting to the inside of a curve) were a genuine plan-vs-actual
+comparison after all, not the ambiguous ground-truth-trail view Claude thought they were. User
+confirmed directly: **the turning-early issue is resolved.** This closes out the (2)/(3)
+`offset_from_furthest` investigation as an actual fix, not just a favorable-looking synthetic
+measurement - the live-tested numbers (0.375m -> 0.091m -> 0.083m max deviation) and the user's
+real-world confirmation now agree.
+
+## 2026-07-18 (2) - Fix "turning early": `offset_from_furthest` was targeting a path point past the curve start
+
+Follow-up to the entry below. User gave a precise symptom: the robot turns before the curve in
+the planned path actually begins - anticipating turns too early rather than tracking the path's
+actual local shape. Read the real scoring code for the two critics that could plausibly cause
+this (`path_angle_critic.cpp`, `path_follow_critic.cpp`, both from
+`ros-navigation/navigation2`'s `humble` branch): both target a path point `offset_from_furthest`
+*indices* ahead of wherever the robot has currently progressed to along the path -
+`PathAngleCritic` steers the robot's heading toward that point, `PathFollowCritic` pulls each
+sampled trajectory's endpoint toward it. A target that far ahead can land past the start of an
+upcoming curve, pulling the executed heading toward the curve's direction before the robot has
+physically reached it - exactly the reported symptom.
+
+### Changed
+- **`config/nav2/nav2_params.yaml`**: `FollowPath.PathAngleCritic.offset_from_furthest` lowered
+  from the default `4` to `2`; `FollowPath.PathFollowCritic.offset_from_furthest` lowered from
+  the default `6` to `3`.
+
+### Live-verified result
+Built a new measurement (heading-lead vs. the planned path's local tangent direction, computed
+from the closest path point at each sample) - not something previously tracked, so no "before"
+baseline exists for direct comparison. The standard K-turn benchmark goal (2.0, 1.0, 179deg) is
+unsuitable for this specific metric: it involves a reversal, during which the robot's heading is
+*correctly* ~180deg from the path's direction-of-travel tangent (that's normal reversing
+kinematics, not a bug), which swamped the measurement with irrelevant large values on a first
+attempt. Retested with a goal requiring only a forward curve (1.5, 1.5, 90deg, no reversal) to
+isolate the actual symptom: heading-lead vs. local path tangent came out to median `6.9deg` /
+p90 `25.6deg` / max `33.2deg`, with `0.123m` max path deviation and the goal succeeding within
+`0.088m` of the true target - a tight result, though not provably an improvement over the old
+`offset_from_furthest` values without a same-goal "before" run.
+
+### Known limitation
+- No direct before/after comparison exists for this specific fix - the live test confirms the
+  post-fix behavior is reasonably tight, not that it's better than the prior config on an
+  apples-to-apples basis. If turning-early is still visible after this, lower
+  `offset_from_furthest` further (e.g. `2`/`1`); if the car instead starts reacting *late* to
+  real curves/corners (undershooting turns), raise back toward the defaults (`4`/`6`).
+- The reversal-goal heading-lead measurement (median 37deg, max 179deg) was discarded as
+  contaminated, but the underlying test infrastructure (`verify_early_turn.py` in scratch) is
+  reusable if a future session wants to separate "genuine early-turning" from "expected reversal
+  heading" more rigorously (e.g. by detecting the path's cusp index and excluding samples near it
+  rather than excluding the whole goal).
+
+## 2026-07-18 - Reduce MPPI sampling noise: sharper final accuracy, modestly tighter path-following
+
+User reported the robot deviates from the planned path mid-trip and shared a screen recording as
+evidence (`~/Videos/Screencasts/Screencast from 07-18-2026 09:46:18 AM.webm`). Extracted frames
+via OpenCV (no `ffmpeg`/`ffprobe` available, only `libav*-dev` runtime libs - `cv2.VideoCapture`
+worked directly, though frame-accurate seeking via `CAP_PROP_POS_FRAMES` failed on this VP9-encoded
+webm and had to fall back to sequential `.read()` calls). The recording is Gazebo's own top-down
+view with its built-in motion-trail feature (ground-truth trail of the robot's actual movement),
+not an RViz overlay with the nav2-planned path drawn in - so it confirmed the *character* of the
+motion (a jerky, tight period roughly mid-trip) but didn't provide pixel-comparable deviation
+data against the plan. That already matched what live testing had measured and flagged as an
+open issue in the (3) entry above (0.31-0.45m max deviation), so addressed it directly rather
+than re-deriving the same fact from the video.
+
+Checked `nav2_mppi_controller/src/optimizer.cpp` on GitHub for the real default values of
+`vx_std`/`wz_std` (0.2/0.4) rather than assume the existing config was already at a sensible
+baseline - confirmed the config was sitting exactly at the shipped defaults. Rather than raise
+`PathAlignCritic`'s weight further (already the highest-weighted critic in use, at 10.0), lowered
+the sampling noise instead - a different lever that controls how widely MPPI's candidate
+trajectories spread each cycle, independent of critic weighting.
+
+### Changed
+- **`config/nav2/nav2_params.yaml`**: `FollowPath.vx_std` lowered `0.2` -> `0.15`; `wz_std`
+  lowered `0.4` -> `0.3`.
+
+### Live-verified result
+Reran the standard test goal (2.0, 1.0, 179deg from origin) used throughout this investigation:
+- Max path deviation during travel: `0.447m -> 0.375m` (modest improvement).
+- Final position error: `0.139m -> 0.054m` (sharp improvement - well within the `0.12m`
+  `xy_goal_tolerance` from (3), no more borderline latching issue).
+- Final yaw error: `2.67deg -> 3.37deg` (essentially unchanged, still well within `0.3` rad
+  tolerance).
+- **Total travel time: `122.4s -> 172.4s`** - a real trade-off, not a pure win. Tighter sampling
+  explores fewer candidate trajectories' worth of "boldness," converging more cautiously. Two
+  `Failed to make progress` recoveries still occurred during this run (down from typically 3-4+
+  in earlier tests), each adding to the elapsed time.
+
+### Known limitation
+- The travel-time increase (+41%) was not weighed against user priorities before making this
+  change - if speed matters more than the last few cm/deg of accuracy for this deployment,
+  `vx_std`/`wz_std` should be raised back toward the defaults, or partially split the difference
+  (e.g. `0.17`/`0.35`) rather than kept at the current values. Ask before assuming accuracy
+  should always win that trade-off.
+- Path deviation improved only modestly (0.447m -> 0.375m still isn't tight) - if mid-trip
+  deviation specifically is still the primary complaint after this, the video evidence suggests
+  looking at the jerky/tight-turning period specifically (possibly still curvature/`ConstraintCritic`
+  related) rather than assuming general noise reduction alone will fully resolve it.
+
+## 2026-07-15 (3) - Found and fixed the actual cause: `PreferForwardCritic` was fighting the planned reversal
+
+User visually confirmed (in RViz) the actual mechanism behind the K-turn failures: the plan
+itself correctly shows a reverse segment, but the robot doesn't execute it - "the path shows a
+reverse, but the robot is not moving on the planned path." This matched a precise hypothesis from
+reading the real MPPI critic source (not guessed): `PreferForwardCritic` penalizes any reverse
+velocity (`cost_weight` 5.0) for as long as the robot is more than its `threshold_to_consider`
+(default 0.5m) from the goal, while `PathFollowCritic` - the critic that enforces sticking to the
+planned path - stops applying inside *its own* `threshold_to_consider` (default 1.4m). That
+leaves a 0.5m-1.4m "dead zone" around the goal where nothing enforces the planned path, but
+`PreferForwardCritic` is still actively fighting any reverse motion. A K-turn's reversal segment
+plausibly falls in exactly that zone.
+
+### Changed
+- **`config/nav2/nav2_params.yaml`**: removed `PreferForwardCritic` from `FollowPath.critics`
+  entirely - its entire purpose (discourage reversing) is fundamentally at odds with this
+  vehicle's confirmed requirement for real reversing capability, and is redundant with
+  `planner_server.GridBased.reverse_penalty`, which already discourages *unnecessary* reversing
+  at the planning level without fighting a reverse the plan has already decided is needed.
+- **`config/nav2/nav2_params.yaml`**: `FollowPath.PathFollowCritic.threshold_to_consider` lowered
+  from the default `1.4` to `0.5`, matching `PathAlignCritic`/`GoalAngleCritic` - closes the dead
+  zone by keeping path-following guidance active up to the same final-approach boundary the other
+  critics already use.
+- **`config/nav2/nav2_params.yaml`**: `general_goal_checker.xy_goal_tolerance` widened slightly
+  from `0.1` to `0.12` - see the live-test result below for why.
+
+### Live-verified result (this one actually worked)
+Reran both test goals used throughout this investigation:
+- Goal (2.0, 1.0, 179deg) from origin: **succeeded**, yaw error improved from 6.97deg to
+  **2.67deg**, position error 0.202m -> 0.139m. (Path deviation during travel went up, 0.313m ->
+  0.447m - a real trade-off, not a pure win: removing `PreferForwardCritic` gives the planner's
+  reverse decision more control, so the *pursuit* logic doesn't fight it, but it doesn't
+  necessarily improve mid-path tightness.)
+- Return-trip goal (0, 0, 0deg), the one that previously failed catastrophically (2.2m position
+  error, 177deg yaw error, effectively never attempting the reversal): converged to **0.145m /
+  0.22deg** of the true goal - a massive improvement, though it cycled through repeated
+  `progress_checker`-triggered abort/retries instead of latching "reached," since 0.145m is just
+  outside the old `0.1` `xy_goal_tolerance`. That's what prompted the tolerance widening above.
+
+### Known limitation
+- The `xy_goal_tolerance: 0.12` change was not independently re-verified after being added (made
+  after the live tests above, based on their measured result) - if 0.145m convergence isn't
+  representative and the car sometimes settles further out, this tolerance may need to go back
+  down and the remaining gap addressed differently (e.g. `movement_time_allowance` or
+  `GoalCritic.cost_weight` further).
+- Path deviation during travel (0.3-0.45m measured) is still fairly loose - if that specifically
+  is still a complaint once goal-reaching itself is confirmed reliable, `PathAlignCritic`'s weight
+  (already the highest at 10.0) or `ConstraintCritic` may need attention next.
+
+## 2026-07-15 (2) - AMCL tuning for localization jitter: real but incomplete fix; ruled out physics as the cause of K-turn failures
+
+User reported the local map/lidar points visibly "drift" during the goal-approach reorientation
+maneuver, plus continued goal-reaching failures. Live-measured the `map`->`odom` TF directly
+(0.2s sampling) during a goal requiring a K-turn: confirmed real jumps up to 7.2cm / 2.3deg in a
+single step, roughly every 5-10s - this is what renders as lidar points "jumping" in the map
+frame, since every scan point's map-frame position depends on the current `map`->`odom`
+correction. Likely cause: real wheel odometry drifts faster during tight/reversing motion (more
+slip) than `alpha1-5: 0.2` assumed, so AMCL underestimated uncertainty between scan-match updates
+and corrected in large, sudden jumps to catch up.
+
+### Changed
+- **`config/nav2/nav2_params.yaml`**: `amcl.alpha1-5` raised `0.2` -> `0.4` (all five); `amcl.
+  update_min_d`/`update_min_a` lowered `0.25`/`0.2` -> `0.15`/`0.1` (re-localize more often, in
+  smaller increments, rather than accumulating more drift between corrections).
+
+### Live-verified result (honest, not a full fix)
+Reran the identical live `map`->`odom` measurement after this change: jump *count* increased
+(14 -> 72) while jump *magnitude* decreased (max 7.2cm -> max 5.6cm, mostly 1-3cm). This is a
+real, measured change in the *character* of the jitter (more frequent, smaller corrections
+instead of fewer, larger ones) - but it is **not clearly a visual improvement** (constant small
+jitter could look worse than occasional bigger snaps, not better) and it **did not fix the
+underlying goal-reaching failure** - the same test goal still timed out after 120s, ending at
+(2.76, 0.06, 36deg) against a target of (2.0, 1.0, 179deg). Keeping this change since smaller,
+more frequent corrections are the more theoretically sound direction and it's a plausible partial
+improvement, but not claiming it resolves the reported symptom.
+
+### Major finding: physics-level reversing is NOT the problem
+Given RPP tuning, MPPI's controller swap, footprint/critic-weight fixes, and now AMCL tuning have
+all failed to reliably fix K-turn-requiring goals, tested whether the vehicle's actual reversing
+capability is itself unstable - bypassing all of nav2, publishing raw `/cmd_vel` directly to the
+drive plugin and measuring `map`->`base` TF:
+- **Pure reverse** (`linear.x: -0.15`, no steering) over 0.75m: lateral drift only 2mm, yaw drift
+  0.01deg - essentially perfect.
+- **Reverse + steering simultaneously** (`linear.x: -0.15`, `angular.z: 0.5`, the actual motion a
+  K-turn segment needs) over ~5.5s of active turning: smooth, monotonic yaw change from ~0deg to
+  ~93deg, no jumps, no instability.
+
+**This rules out the drive plugin/vehicle physics as the cause of the K-turn failures.** The
+robot can genuinely execute a clean, stable reverse-and-steer maneuver when commanded directly.
+The remaining problem is confirmed to be entirely within the nav2 planning/execution stack
+(`SmacPlannerHybrid`'s path geometry at the cusp, or `MPPIController`'s execution of it, or their
+interaction) - not something a lower-level (URDF/PID/friction) fix would address.
+
+### Known limitation / next steps
+- Root cause of the remaining K-turn goal-reaching failures is still not found. Suggested next
+  investigation (not yet done): inspect the actual `/plan` path geometry for a failing goal
+  directly (not just aggregate success/failure) to see whether `SmacPlannerHybrid` is producing a
+  sensible K-turn shape at all for these cases, before assuming the problem is in `MPPIController`
+  execution again.
+- Given the same class of goal (~180deg heading change) has now failed under four different
+  configurations, it may be worth reconsidering whether every such goal is achievable at this
+  vehicle's `minimum_turning_radius: 0.5` m in the available map space, rather than continuing to
+  treat each failure as a newly-introduced bug.
+
 ## 2026-07-15 (1) - Live-verified: (11)'s fixes are a real but partial improvement, not a full fix
 
 User reported "still not accurate" after (11) with no further detail. Rather than guess again or

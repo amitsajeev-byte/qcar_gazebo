@@ -101,8 +101,9 @@ tuning guide.
   displacement alone; see the inline comment in `nav2_params.yaml` and `CHANGELOG.md`'s
   2026-07-14 (3) entry.
 - `general_goal_checker` (`SimpleGoalChecker`): `stateful: true` (once within tolerance, stays
-  "reached" even if it drifts back out - avoids flapping), `xy_goal_tolerance: 0.1` m,
-  `yaw_goal_tolerance: 0.3` rad (~17°) - see `TUNING.md` §3.
+  "reached" even if it drifts back out - avoids flapping), `xy_goal_tolerance: 0.12` m (widened
+  slightly from `0.1` on 2026-07-15 (3) - see `TUNING.md` §3), `yaw_goal_tolerance: 0.3` rad
+  (~17°) - see `TUNING.md` §3.
 - `FollowPath` (`MPPIController` as of 2026-07-14 (9), replacing `RegulatedPurePursuitController`
   - see `TUNING.md` §2 for the full rationale and the accuracy-relevant parameters): `time_steps:
   56` / `model_dt: 0.05` / `batch_size: 2000` (core sampling parameters - trajectory horizon
