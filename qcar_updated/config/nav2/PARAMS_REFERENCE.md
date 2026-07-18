@@ -93,26 +93,38 @@ tuning guide.
   before the whole `FollowPath` action reports failure (triggering a recovery behavior).
 - `progress_checker_plugin` / `goal_checker_plugins` / `controller_plugins` - names the plugin
   instances used below.
-- `progress_checker` (`SimpleProgressChecker`): `required_linear_distance: 0.5` /
-  `required_angular_distance: 0.1` - the robot must move at least this much within a time window
-  (elsewhere-configured internal default) or it's considered "stuck," triggering
-  failure/recovery.
+- `progress_checker` (`SimpleProgressChecker`): `required_linear_distance: 0.1` m /
+  `movement_time_allowance: 30.0` s - the robot must move at least this much linear distance
+  within this time window or it's considered "stuck," triggering failure/recovery.
+  `required_angular_distance: 0.1` is declared but **not implemented** by this Humble version of
+  `SimpleProgressChecker` (added in a later nav2 release) - progress is judged by linear
+  displacement alone; see the inline comment in `nav2_params.yaml` and `CHANGELOG.md`'s
+  2026-07-14 (3) entry.
 - `general_goal_checker` (`SimpleGoalChecker`): `stateful: true` (once within tolerance, stays
   "reached" even if it drifts back out - avoids flapping), `xy_goal_tolerance: 0.1` m,
-  `yaw_goal_tolerance: 0.7` rad (~40°) - see `TUNING.md` §3.
-- `FollowPath` (`RegulatedPurePursuitController`) - see `TUNING.md` §2 for the accuracy-relevant
-  ones; the rest: `lookahead_time: 1.5` s (an alternate way lookahead distance can scale with
-  speed, only used if `use_velocity_scaled_lookahead_dist: true`, which is `false` here so this
-  is inert), `rotate_to_heading_angular_vel: 1.0` (only relevant if `use_rotate_to_heading: true`,
-  `false` here since the car can't rotate in place), `transform_tolerance: 0.5` s (TF lookup
-  slack), `min_approach_linear_velocity: 0.05` / `approach_velocity_scaling_dist: 0.6` (slows the
-  car down over the last 0.6m before the goal, down to a floor of 0.05 m/s),
-  `use_collision_detection: true` / `max_allowed_time_to_collision_up_to_carrot: 1.0` (aborts/
-  replans if the planned arc to the lookahead point would hit an obstacle within 1s),
-  `allow_reversing: false` (car will not back up to correct a path), `rotate_to_heading_min_angle:
-  0.785` rad (~45°, inert while `use_rotate_to_heading` is false), `max_robot_pose_search_dist:
-  10.0` m (how far along the path RPP searches to find the robot's closest point, for very long
-  paths).
+  `yaw_goal_tolerance: 0.3` rad (~17°) - see `TUNING.md` §3.
+- `FollowPath` (`MPPIController` as of 2026-07-14 (9), replacing `RegulatedPurePursuitController`
+  - see `TUNING.md` §2 for the full rationale and the accuracy-relevant parameters): `time_steps:
+  56` / `model_dt: 0.05` / `batch_size: 2000` (core sampling parameters - trajectory horizon
+  length, timestep size, and number of candidate trajectories sampled per control cycle),
+  `vx_std` / `vy_std` / `wz_std: 0.2 / 0.0 / 0.4` (sampling noise standard deviation per axis -
+  `vy_std: 0.0` since this is non-holonomic), `vx_max` / `vx_min: 0.3 / -0.2` (forward/reverse
+  speed limits), `vy_max: 0.0` (no lateral motion), `wz_max: 1.9` (max angular velocity
+  considered), `iteration_count: 1` (single optimization pass per control cycle - raising this
+  trades CPU for trajectory quality), `prune_distance: 1.7` m (how far ahead along the path is
+  considered for cost evaluation), `transform_tolerance: 0.1` s (TF lookup slack),
+  `temperature: 0.3` / `gamma: 0.015` (MPPI's own softmax-weighting and control-cost trade-off
+  parameters - core to the algorithm, not typically hand-tuned without deeper MPPI familiarity),
+  `motion_model: "Ackermann"` / `AckermannConstraints.min_turning_r: 0.5` (see `TUNING.md` §2 for
+  why this replaces RPP's kinematic assumptions), `visualize: false` (disables publishing sampled
+  trajectory markers for RViz debug view - enable temporarily if you want to see what MPPI is
+  actually considering each cycle), `enforce_path_inversion: true` /
+  `inversion_xy_tolerance: 0.2` / `inversion_yaw_tolerance: 0.4` (dedicated cusp/reversal handling
+  - without `enforce_path_inversion`, MPPI does not correctly treat a path with a direction
+  change as "drive to the cusp, then continue past it," which was the actual cause of the robot
+  not following the planned path at all right after the initial MPPI switch - see `TUNING.md` §2
+  and `CHANGELOG.md`'s 2026-07-14 (10) entry), `critics: [...]` (which cost functions score each
+  candidate trajectory - see `TUNING.md` §2 for the list and what each does).
 
 ## `smoother_server`
 
@@ -125,12 +137,34 @@ tuning guide.
 
 - `expected_planner_frequency: 20.0` (Hz) - used only to warn if planning is taking longer than
   expected, not an actual rate limiter.
-- `GridBased` (`NavfnPlanner`): `tolerance: 0.5` m (accepts a planned path ending within this
-  distance of the exact goal if the goal cell itself is unreachable/occupied), `use_astar: false`
-  (uses Dijkstra instead of A* - slightly slower but doesn't need a heuristic; rarely matters at
-  this map size), `allow_unknown: true` (path can cross unexplored/unknown costmap cells, not
-  just known-free ones). This planner doesn't know about the car's turning-radius limit - see
-  `TUNING.md` §4.
+- `GridBased` (`nav2_smac_planner/SmacPlannerHybrid`, replacing the original `NavfnPlanner` as of
+  2026-07-14 - see `CHANGELOG.md`): a search-based planner that's kinematically aware of this
+  Ackermann car's turning-radius limit. `downsample_costmap: false` / `downsampling_factor: 1` (no
+  costmap downsampling - fine at this map's small size, would trade search speed for resolution
+  on a larger map), `tolerance: 0.5` m (same meaning as before), `allow_unknown: true` (same),
+  `max_iterations: 1000000` / `max_on_approach_iterations: 1000` (search effort caps),
+  `max_planning_time: 5.0` s (hard wall-clock cap per planning attempt),
+  `motion_model_for_search: "REEDS_SHEPP"` (allows reverse/K-turn segments, matching
+  `vx_min < 0` in `FollowPath` - required for this vehicle per user need. This setting has a
+  documented history of instability when paired with `RegulatedPurePursuitController`'s
+  lookahead-point path following in this Humble nav2 version - tried `"DUBIN"` (forward-only, no
+  cusps) as a stable workaround, then switched the *controller* to `MPPIController` instead
+  (see `TUNING.md` §2), which doesn't share RPP's failure mode, allowing `"REEDS_SHEPP"` to be
+  restored - see `TUNING.md` §4 and `CHANGELOG.md`'s 2026-07-14 entries for the full history),
+  `angle_quantization_bins: 72` (5deg heading resolution in the search space),
+  `analytic_expansion_ratio: 3.5` / `analytic_expansion_max_length: 3.0` (tuning for the
+  shortcut/analytic-expansion optimization that tries a direct Reeds-Shepp curve to the goal
+  before falling back to full graph search), `minimum_turning_radius: 0.5` m (padded over the
+  car's true ~0.445m physical minimum - see `TUNING.md` §4 for the derivation),
+  `reverse_penalty: 4.0` (raised from `2.0` - discourages planning a reverse segment unless the
+  goal orientation truly requires one, minimizing unnecessary reversing) /
+  `non_straight_penalty: 1.2` / `change_penalty: 0.0` / `cost_penalty: 2.0` /
+  `retrospective_penalty: 0.025` (search cost weights shaping path preference - see `TUNING.md`
+  §4 for which to adjust for which symptom), `lookup_table_size: 20.0` (size of the precomputed
+  motion-primitive distance heuristic table), `cache_obstacle_heuristic: false` (recompute the
+  obstacle heuristic fresh each planning call rather than caching between calls - safer given
+  costmaps update from live sensor data), `smooth_path: true` (planner's own internal smoothing -
+  see the `smoother_server` note above, since this package's BT trees don't separately invoke it).
 
 ## `local_costmap` / `global_costmap`
 
@@ -143,8 +177,11 @@ tuning guide.
 - `rolling_window: true` / `width: 3` / `height: 3` (local only) - the local costmap is a 3x3m
   window centered on and moving with the robot, rather than a fixed full-map grid.
 - `resolution: 0.05` (m/cell, both) - matches the map's resolution.
-- `robot_radius: 0.15` (both) - circular footprint approximation - see `TUNING.md`'s "Known
-  mismatches" for why this is worth revisiting.
+- `footprint: [[0.22,0.09],[0.22,-0.09],[-0.22,-0.09],[-0.22,0.09]]` (both, as of 2026-07-14 (11))
+  - real polygon matching the car's measured body extent (`models/qcar/QCarBody.stl`: 0.409m long
+  x 0.156m wide), replacing the earlier `robot_radius: 0.15` circular approximation. Now directly
+  load-bearing for `controller_server.FollowPath.CostCritic.consider_footprint: true` and for
+  `planner_server.GridBased`'s own footprint-aware collision checking during planning.
 - `plugins` - which costmap layers are stacked: local = `voxel_layer` + `inflation_layer`; global
   = `static_layer` + `obstacle_layer` + `inflation_layer`.
 - `inflation_layer`: `cost_scaling_factor: 3.0` / `inflation_radius: 0.55` - how obstacle cost
@@ -241,9 +278,6 @@ tuning guide.
 
 ## Worth a second look
 
-- `allow_reversing: false` in `FollowPath` - confirm this is intentional; earlier migration
-  history for the sibling `qcar_navigation` package referenced reversing being enabled for
-  collision recovery.
 - `spin` is registered in `behavior_server.behavior_plugins` despite being physically infeasible
   for this car - check whatever BT XML is actually active to see if it's really excluded from
   the runtime recovery tree (this params file alone doesn't control that).

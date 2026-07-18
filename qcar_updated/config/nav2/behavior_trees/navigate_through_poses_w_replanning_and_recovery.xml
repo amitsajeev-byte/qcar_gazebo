@@ -1,17 +1,18 @@
 <!--
   Adapted from the stock nav2_bt_navigator tree
-  navigate_through_poses_w_replanning_and_recovery.xml - identical except for one change: removed
-  <Spin> from RecoveryActions (physically impossible for this Ackermann car). See the fuller
-  comment in navigate_to_pose_w_replanning_and_recovery.xml in this directory for the "replan
-  only if path becomes invalid" and "lowered RateController hz" alternatives that were tried and
-  reverted (the real fix for goal-approach oscillation with allow_reversing:true turned out to be
-  nav2_params.yaml's progress_checker, not this file).
+  navigate_through_poses_w_replanning_and_recovery.xml - two changes from stock: removed <Spin>
+  from RecoveryActions (physically impossible for this Ackermann car), and lowered RateController
+  hz from 0.333 to 0.15 (replan roughly every 7s instead of every 3s), for consistency with
+  navigate_to_pose_w_replanning_and_recovery.xml in this directory - see the fuller comment there
+  for the full rationale (continuous 1Hz-ish replanning was interrupting the goal-approach K-turn
+  maneuver before it could complete) and for the "replan only if path becomes invalid" bug that
+  was tried and reverted, which applies equally here.
 -->
 <root main_tree_to_execute="MainTree">
   <BehaviorTree ID="MainTree">
     <RecoveryNode number_of_retries="6" name="NavigateRecovery">
       <PipelineSequence name="NavigateWithReplanning">
-        <RateController hz="0.333">
+        <RateController hz="0.15">
           <RecoveryNode number_of_retries="1" name="ComputePathThroughPoses">
             <ReactiveSequence>
               <RemovePassedGoals input_goals="{goals}" output_goals="{goals}" radius="0.7"/>

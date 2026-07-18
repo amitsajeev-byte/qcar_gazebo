@@ -1,5 +1,388 @@
 # Changelog
 
+## 2026-07-15 (1) - Live-verified: (11)'s fixes are a real but partial improvement, not a full fix
+
+User reported "still not accurate" after (11) with no further detail. Rather than guess again or
+ask for another log, ran a live headless test directly (gzserver + full nav2 stack, no display) -
+the first time in this whole tuning thread that Claude verified behavior first-hand instead of
+relying on the user's terminal output. Wrote a verification script using a `map`->`base` TF
+lookup (not raw `/odom`, which is in a different, drifting frame not directly comparable to a
+`map`-frame goal - an earlier version of the test script made this mistake and produced a
+misleading number) to measure true position/heading error against the goal, and subscribed to
+`/plan` to measure maximum deviation from the planned path during travel.
+
+**Results, using a `navigate_to_pose` goal with a ~179deg final-heading mismatch from (0,0,0)
+to (2.0, 1.0)**: succeeded, but not cleanly - position error 0.202m (target tolerance is 0.1m),
+yaw error 6.97deg (within the 0.3 rad/~17deg tolerance), max path deviation 0.313m during travel,
+took 91.6s. **A second goal** (return trip, similarly large heading mismatch) from the resulting
+position **timed out completely after 180s**, with `Failed to make progress` still firing
+repeatedly (~30s cadence, matching `movement_time_allowance`) - the same failure signature RPP
+had, now reproduced with MPPI. Conclusion: (9)'s controller swap and (10)/(11)'s structural fixes
+measurably improved things (this exact failure pattern used to be near-total for goals like this)
+but did not eliminate it - there's still a real, unresolved failure mode for at least some
+goal/position combinations requiring a tight reverse maneuver.
+
+**Isolated one contributing factor via live A/B testing** (using `ros2 param set` on the running
+`controller_server` node - `CostCritic`'s `cost_weight` and related params are dynamically
+reconfigurable, no relaunch needed): temporarily set
+`CostCritic.consider_footprint` back to `false` and reran the exact failing second goal. Result
+was closer (position error 0.435m vs 0.696m, yaw error 20deg vs 80deg) but still timed out -
+`consider_footprint: true` (from (11)) is a genuine contributing factor to failures in tight
+maneuvering space (a stricter, more accurate footprint is harder to keep collision-free during a
+K-turn than the old undersized circle was), but it is not the sole cause. The (11) fix is being
+kept (footprint-aware collision checking against the car's real shape is correct behavior, and
+made the first goal notably more accurate), but this trade-off - it makes tight reversals harder
+to execute - is now a known, understood cost of that correctness, not a hidden regression.
+
+### Not changed this round
+No config changes were made - this was a diagnostic-only session establishing ground truth via
+direct testing before further tuning, to avoid another round of unverified guesses. `nav2_params.yaml`
+is unchanged from (11) (the live `ros2 param set` used for the A/B test was memory-only on the
+already-running test node, not persisted).
+
+### Suggested next steps (not yet done)
+- The remaining "some goals succeed, some time out with repeated Failed to make progress" pattern
+  now looks less like a pure algorithm/controller bug (MPPI measurably outperforms RPP here) and
+  more like a genuine kinematic/spatial difficulty: this vehicle's `minimum_turning_radius: 0.5`m
+  is large relative to some parts of this map, and a Reeds-Shepp K-turn reversal may need more
+  clear space than is available at some goal/heading combinations. Worth checking whether the
+  specific goals that fail are in tighter map regions than the ones that succeed, rather than
+  continuing to treat every failure as the same bug.
+- If corner-cutting/path-deviation (0.2-0.35m observed) is still the primary complaint on goals
+  that DO succeed, `PathAlignCritic`/`PathFollowCritic` weight increases are the next lever (see
+  `TUNING.md` §2) - not yet tried, since this round prioritized establishing ground truth over
+  further blind tuning.
+- Consider testing with a smaller `minimum_turning_radius` only if the steering PID
+  (`urdf/qcar_model.xacro`, `TUNING.md` §1) is confirmed able to actually deliver a tighter turn
+  reliably - artificially shrinking this without that confirmation would trade one failure mode
+  for another.
+
+## 2026-07-14 (11) - Fix accuracy: footprint-blind collision checking + verified critic weights + real footprint polygon
+
+Follow-up to (10). User reported "still not accurate": path followed loosely (cutting corners),
+final position off by more than `xy_goal_tolerance` even when reported "reached," and some goals
+still failing after many retries. Rather than guess at critic `cost_weight` values again, fetched
+the actual Humble source for every critic in use directly from GitHub
+(`ros-navigation/navigation2`, `humble` branch,
+`nav2_mppi_controller/src/critics/*.cpp`) to get real default values instead of estimating - this
+surfaced a genuine bug, not just an undertuned default.
+
+**Root cause found**: `CostCritic.consider_footprint` defaults to `false`. The (9)/(10) MPPI
+config never set it (despite `PARAMS_REFERENCE.md` incorrectly documenting it as `true`), so
+collision/obstacle cost was being evaluated at the robot's center point only, not its actual
+elongated footprint - a direct, plausible cause of corner-cutting near obstacles for a car-shaped
+robot. Enabling it exposed a second, older latent issue: `local_costmap`/`global_costmap` were
+still using `robot_radius: 0.15` (a circular approximation, flagged as a known mismatch as far
+back as the first `TUNING.md` draft but never fixed) - footprint-aware collision checking against
+an undersized circle wouldn't actually protect the car's real front/rear overhangs. Fixed both
+together, plus raised `GoalCritic.cost_weight` for the reported final-position inaccuracy.
+
+### Changed
+- **`config/nav2/nav2_params.yaml`**: `controller_server.FollowPath.CostCritic.consider_footprint`
+  set to `true` (was silently `false`).
+- **`config/nav2/nav2_params.yaml`**: `controller_server.FollowPath.GoalCritic.cost_weight` raised
+  from the verified default `5.0` to `8.0` - strengthens convergence to the exact goal point
+  within `GoalCritic`'s 1.4m `threshold_to_consider`, addressing the reported position inaccuracy.
+- **`config/nav2/nav2_params.yaml`**: `local_costmap`/`global_costmap`'s `robot_radius: 0.15`
+  replaced with a real polygon `footprint`, measured directly from `models/qcar/QCarBody.stl`
+  (X -0.2006 to 0.2082, Y -0.0806 to 0.0754 - 0.409m long x 0.156m wide, rounded outward with a
+  small margin): `[[0.22, 0.09], [0.22, -0.09], [-0.22, -0.09], [-0.22, 0.09]]`.
+- **`TUNING.md`** / **`config/nav2/PARAMS_REFERENCE.md`**: updated with the verified real default
+  `cost_weight` for every critic in use (`ConstraintCritic` 4.0, `CostCritic` 3.81, `GoalCritic`
+  5.0, `GoalAngleCritic` 3.0, `PathAlignCritic` 10.0, `PathFollowCritic` 5.0, `PathAngleCritic`
+  2.0, `PreferForwardCritic` 5.0), each critic's `threshold_to_consider`, and the footprint fix.
+  The "Known mismatches" section marked resolved rather than removed, to preserve the history.
+
+### Known limitation
+- Not live-tested by Claude - same reasoning as (9)/(10). This round is grounded in verified
+  source (not guessed defaults), which is a step up in confidence, but `GoalCritic.cost_weight:
+  8.0` specifically is still an estimate of the *right* value, not something derived from
+  evidence - if position accuracy is still off, raise it further; if the car now ignores the path
+  in the final approach to beeline for the goal, it went too far. The "goal failed after many
+  retries" symptom may or may not be resolved by this round - if it persists, get a fresh
+  terminal log rather than assuming it's the same root cause as before.
+
+## 2026-07-14 (10) - Fix MPPI not following the planned path: missing `enforce_path_inversion`
+
+Follow-up to (9). User reported the robot wasn't following the planned path at all after the
+MPPI switch. Rather than guess at critic weights, checked `nav2_mppi_controller`'s path-handling
+header directly
+(`/opt/ros/humble/include/nav2_mppi_controller/tools/path_handler.hpp`) and found
+`enforce_path_inversion_{false}` - a dedicated mechanism for handling a path that contains a
+cusp/reversal (exactly what `SmacPlannerHybrid`'s Reeds-Shepp K-turns produce), defaulting to
+off. Without it, MPPI does not correctly treat the path as "drive to the cusp, then continue past
+it" - this was left unset in the (9) config, which only set structural motion/velocity
+parameters and left everything else at defaults. This is very likely the actual cause of "not
+following the path" (a structural gap, not a critic-weight tuning issue), though not yet
+confirmed via a live test with logs.
+
+### Changed
+- **`config/nav2/nav2_params.yaml`**: added `controller_server.FollowPath.enforce_path_inversion:
+  true`, `inversion_xy_tolerance: 0.2`, `inversion_yaw_tolerance: 0.4` (the tolerance values are
+  the plugin's own defaults, made explicit rather than left implicit).
+- **`TUNING.md`** / **`config/nav2/PARAMS_REFERENCE.md`**: documented these three parameters as
+  critical for this vehicle's reversing use case, and noted `PathAlignCritic`/`PathFollowCritic`
+  weight tuning as the next lever if path-hugging is still imperfect after this fix (as opposed
+  to structurally broken).
+
+### Known limitation
+- Not live-tested by Claude - same reasoning as (9), the user's own session was active. This is a
+  narrower, more targeted fix than (9) (one specific missing parameter, found via source
+  inspection rather than broad guessing), but still needs a real goal test to confirm the robot
+  now tracks the planned path, especially through a cusp/reversal segment.
+
+## 2026-07-14 (9) - Replace local controller with MPPI: RPP's cusp instability was never reliably tunable away
+
+Follow-up to (8). User shared a fresh log after the cusp-stabilizing `FollowPath` tuning: goal 1
+succeeded (after one retry, ~85s), but goal 2 - shorter distance, same ~180deg heading mismatch
+pattern - failed completely after cycling through repeated aborts/recoveries for **7.6 minutes**
+before `bt_navigator` gave up ("Goal failed"). This is not a fixed problem, it's an intermittent
+one: the (8) mitigations (tighter lookahead, slower cusp approach, higher `reverse_penalty`)
+reduce the failure rate but don't eliminate it, and an unreliable navigation stack (sometimes
+takes 85s, sometimes fails after 7+ minutes) isn't a usable outcome.
+
+Rather than continue tuning `RegulatedPurePursuitController` parameters against a failure mode
+that's inherent to its algorithm (a single lookahead/"carrot" point tracked along the path, which
+has no robust handling for a large lookahead radius straddling both sides of a cusp), swapped the
+local controller entirely to `nav2_mppi_controller::MPPIController`. MPPI samples many candidate
+trajectories each control cycle and scores them against cost critics, rather than tracking one
+point on the path - it doesn't share RPP's specific failure mode, and (confirmed via
+`/opt/ros/humble/include/nav2_mppi_controller/motion_models.hpp`) natively supports an
+`AckermannMotionModel` with a real minimum-turning-radius hard constraint, which is a better
+kinematic fit for this vehicle than RPP's curvature-based regulation ever was.
+
+### Changed
+- **`config/nav2/nav2_params.yaml`**: `controller_server.FollowPath.plugin` changed from
+  `nav2_regulated_pure_pursuit_controller::RegulatedPurePursuitController` to
+  `nav2_mppi_controller::MPPIController`. Configured with `motion_model: "Ackermann"` and
+  `AckermannConstraints.min_turning_r: 0.5` (kept in sync with
+  `planner_server.GridBased.minimum_turning_radius`), `vx_max/vx_min: 0.3/-0.2` (forward/reverse
+  speed limits), `vy_max: 0.0` (non-holonomic), `wz_max: 1.9`, core sampling parameters
+  (`batch_size: 2000`, `time_steps: 56`, `model_dt: 0.05`), and the standard critic set
+  (`ConstraintCritic`, `CostCritic`, `GoalCritic`, `GoalAngleCritic`, `PathAlignCritic`,
+  `PathFollowCritic`, `PathAngleCritic`, `PreferForwardCritic`). All the RPP-specific parameters
+  from (8) (`lookahead_dist`, `regulated_linear_scaling_*`, etc.) are removed - they don't apply
+  to MPPI.
+- **`package.xml`**: added `nav2_mppi_controller` exec_depend.
+- **`TUNING.md`** / **`config/nav2/PARAMS_REFERENCE.md`**: §2 (path following) rewritten for MPPI;
+  §4 (planner) and the `progress_checker`/`FollowPath` sections updated to remove stale
+  RPP-specific mitigation language now that the controller itself has changed.
+
+### Verification performed (structural, not a live goal test)
+Since local access to the critics' `.cpp` source isn't available (only headers), per-critic cost
+weights were deliberately left at nav2's own built-in defaults rather than guessed at - only
+structural/load-bearing parameters are set explicitly. Verified before handing off:
+- `nav2_mppi_controller::MPPIController` matches the registered pluginlib class exactly
+  (`/opt/ros/humble/share/nav2_mppi_controller/mppic.xml`).
+- All 8 critic short names match `critics.xml`'s registered classes, and
+  `critic_manager.hpp::getFullName()` confirms short names (e.g. `"ConstraintCritic"`) are
+  expanded to the full `mppi::critics::X` form internally - the config doesn't need the
+  namespaced form.
+- The literal string `"Ackermann"` (capital A, matching `AckermannMotionModel`'s selection logic)
+  is present in the compiled `.so`, and `AckermannConstraints.min_turning_r` matches the actual
+  parameter path declared in `motion_models.hpp`.
+- `nav2_params.yaml` parses as valid YAML with the expected structure (checked directly with
+  Python's `yaml` module).
+
+### Known limitation
+- **Not live-tested by Claude at all** - the user has their own `qcar_nav2.launch.py` session
+  running with a real display, so no test launch was attempted in this session to avoid
+  disrupting it. This is the biggest structural change of this entire tuning session (new
+  controller algorithm, not a parameter adjustment) and rests on header/pluginlib verification,
+  not observed behavior. Needs a full relaunch and goal test, ideally repeating a goal similar to
+  the one that previously failed after 7+ minutes, before trusting this is actually fixed.
+- Per-critic cost weights are untuned (nav2 defaults). If paths look reasonable but the car
+  behaves oddly in some specific way (e.g. too cautious, cuts corners, prefers reverse too much),
+  the fix is very likely a specific critic's `cost_weight`, not the structural parameters above -
+  see `TUNING.md` §2 for which critic governs which behavior.
+
+## 2026-07-14 (8) - Re-enable reversing with cusp-stabilizing `FollowPath` tuning
+
+Follow-up to (7). User rejected the forward-only Dubins workaround: reversing is a real
+requirement for this vehicle, not optional. Before reverting blindly, checked
+`RegulatedPurePursuitController`'s header
+(`/opt/ros/humble/include/nav2_regulated_pure_pursuit_controller/regulated_pure_pursuit_controller.hpp`)
+directly - it does have cusp-detection (`findVelocitySignChange`, "checks for the cusp position...
+robot distance from the cusp"), used internally to regulate speed near a cusp. So this isn't a
+complete blind spot in the controller, just evidently not enough margin at the lookahead/speed
+settings that were in use when the instability was observed. Re-enabled reversing paired with a
+meaningfully more conservative configuration, rather than just flipping the same settings back.
+
+### Changed
+- **`config/nav2/nav2_params.yaml`**: `planner_server.GridBased.motion_model_for_search` back to
+  `"REEDS_SHEPP"`; `reverse_penalty` raised `2.0` -> `4.0` (prefer forward-only routes, only
+  reverse when the goal orientation truly requires it - fewer cusps encountered in practice).
+- **`config/nav2/nav2_params.yaml`**: `controller_server.FollowPath.allow_reversing` back to
+  `true`.
+- **`config/nav2/nav2_params.yaml`**: `FollowPath.lookahead_dist` / `min_lookahead_dist` /
+  `max_lookahead_dist` reduced `0.6/0.3/0.9` -> `0.35/0.15/0.5` - a smaller carrot-point search
+  radius is less likely to straddle both sides of a cusp and flip direction as the robot's exact
+  position fluctuates.
+- **`config/nav2/nav2_params.yaml`**: `FollowPath.regulated_linear_scaling_min_radius` /
+  `_min_speed` changed `0.9/0.25` -> `1.2/0.1` - slows the car down harder and earlier approaching
+  tight curvature (a cusp is effectively infinite curvature), giving RPP's internal
+  `findVelocitySignChange` cusp regulation more time/control authority to settle the direction
+  decision before the robot drifts enough to flip it again.
+- **`TUNING.md`** / **`config/nav2/PARAMS_REFERENCE.md`**: updated to describe `"REEDS_SHEPP"` +
+  the new conservative `FollowPath` values, with the full back-and-forth history preserved so a
+  future session understands why these specific values were chosen (not just their current state).
+
+### Known limitation
+- **This is a mitigation, not a guaranteed fix.** The underlying cusp-following behavior in this
+  Humble nav2 version's `RegulatedPurePursuitController` is still what it is - these changes
+  reduce the risk (slower, tighter-lookahead approach gives the existing cusp regulation more
+  margin; higher `reverse_penalty` means fewer cusps are planned at all) without eliminating the
+  architectural gap. Not independently re-verified by Claude - needs a real goal test, ideally
+  with the user watching the sim directly again during any cusp/reversal moment, not just the
+  logs. If oscillation returns, `TUNING.md` §4 has the next levers to try (`reverse_penalty`
+  further, then `desired_linear_vel`) before falling back to `"DUBIN"` again.
+
+## 2026-07-14 (7) - Switch planner to forward-only Dubins paths: `RegulatedPurePursuitController` can't handle cusps in this nav2 version
+
+Follow-up to (6). The rate-slowing fix did not help either: user shared a fresh log showing
+`Failed to make progress` still firing roughly every ~30s (matching `movement_time_allowance`
+almost exactly) even at the slower 5s replan rate - ruling out replanning frequency as the actual
+bottleneck (a much less frequently changing path still didn't let the robot accumulate 10cm of
+net movement in 25-30 seconds). Asked the user to watch the sim directly during a stall window
+rather than the logs: confirmed the robot was actively wiggling (forward/back) the whole time,
+not frozen - ruling out a collision-detection stall and confirming a genuine path-following
+instability.
+
+Conclusion: `SmacPlannerHybrid` with `motion_model_for_search: "REEDS_SHEPP"` was correctly
+producing K-turn paths with a reverse segment for large final-heading mismatches, but
+`RegulatedPurePursuitController` in this Humble nav2 version doesn't have robust handling for
+path cusps (a direction-reversal point) - the lookahead/carrot-point search becomes unstable
+right at the cusp, causing indefinite oscillation with no net progress. This is a controller-level
+limitation, not something fixable via replanning rate, `progress_checker` patience, or
+`yaw_goal_tolerance` - all three of those were legitimate fixes for their own specific symptoms
+((3), (6), and the reverted (4) respectively) but none of them address an unstable cusp.
+
+### Changed
+- **`config/nav2/nav2_params.yaml`**: `planner_server.GridBased.motion_model_for_search` changed
+  from `"REEDS_SHEPP"` to `"DUBIN"` - forward-only path search, no cusps. The car will now take a
+  wider forward loop instead of a tight reverse K-turn when a large final-heading change is
+  needed, trading path efficiency for stability.
+- **`config/nav2/nav2_params.yaml`**: `controller_server.FollowPath.allow_reversing` changed from
+  `true` back to `false`, to match the forward-only planner - a forward-only plan with a
+  controller still free to independently decide to reverse was part of what caused the
+  instability.
+- **`TUNING.md`** / **`config/nav2/PARAMS_REFERENCE.md`**: updated the global-planner sections to
+  describe `"DUBIN"` instead of `"REEDS_SHEPP"`, and to note `reverse_penalty` is now unused.
+
+### Known limitation
+- Not independently re-verified by Claude - based on the user's shared logs and direct
+  observation of the sim, not a fresh live test in this session. Needs a relaunch and a goal test
+  to confirm the oscillation is actually gone and that the resulting forward-loop paths are
+  acceptable in practice (not, e.g., looping through a space that's too tight for the wider
+  maneuver in some parts of the map).
+- If Reeds-Shepp/reversing is ever revisited (e.g. after a nav2 upgrade with better cusp
+  handling), re-enable both `motion_model_for_search: "REEDS_SHEPP"` and `allow_reversing: true`
+  together and retest live - don't re-enable only one.
+
+## 2026-07-14 (6) - Slow replanning again now that `progress_checker` won't misinterpret the wait
+
+Follow-up to (5). User shared a fresh terminal log after the Hybrid-A* switch: "improved
+slightly" but still oscillating. The log showed `[controller_server]: Passing new path to
+controller.` firing roughly once per second, continuously - confirming the `RateController` is
+still at the stock `1.0` hz - and `Failed to make progress` firing again almost exactly 30s after
+the prior one (matching `movement_time_allowance: 30.0` from (3) precisely, confirming that fix
+is working as configured). The robot covered under 0.1m of net displacement across that entire
+30-second window: not slow progress, genuinely stuck. Conclusion: even with SmacPlannerHybrid
+now producing a correct K-turn path, a fresh replan arriving roughly every second interrupts that
+maneuver before it can ever complete, forcing it to restart repeatedly.
+
+This is the same fix attempted once before in (2) and reverted - but (2) was reverted because it
+interacted badly with the *old*, impatient `progress_checker` (10s default allowance, 0.5m
+required), where each abort then had to wait up to 5s for the next scheduled path, turning quick
+retries into multi-minute stalls. `progress_checker` is patient now (3), so that interaction
+should no longer apply - reapplying the rate change on that basis.
+
+### Changed
+- **`config/nav2/behavior_trees/navigate_to_pose_w_replanning_and_recovery.xml`**: `RateController
+  hz` lowered from `1.0` to `0.2` again (replan every 5s).
+- **`config/nav2/behavior_trees/navigate_through_poses_w_replanning_and_recovery.xml`**:
+  `RateController hz` lowered from `0.333` to `0.15` again (replan roughly every 7s), for
+  consistency.
+- Both files' header comments updated with the full back-and-forth history (tried in (2), reverted,
+  now reapplied for a different, verified-fixed reason) so a future session doesn't re-revert this
+  blindly without checking whether the (3) `progress_checker` fix is still in place first.
+
+### Known limitation
+- Not independently re-verified by Claude - based on the user's shared log and the same
+  reasoning already validated for (2)'s original attempt, not a fresh live test in this session.
+  If oscillation still persists after this, the next thing to check is whether SmacPlannerHybrid's
+  plan is actually consistent between consecutive replans (compare two consecutive `path` messages
+  on `/plan` a few seconds apart during the goal-approach phase) - if the planned K-turn geometry
+  itself is changing meaningfully call to call (not just timing), slowing the rate further won't
+  help and the search parameters (`reverse_penalty`, `retrospective_penalty`,
+  `angle_quantization_bins`) may need adjustment instead.
+
+## 2026-07-14 (5) - Real fix for accurate final heading: switch global planner to Hybrid-A*
+
+Follow-up to (4) - user rejected the "loosen yaw_goal_tolerance to accept any angle" workaround:
+final orientation genuinely matters for their use case, "irrespective of any angle... goal
+completed" is not correct behavior. That workaround was masking the problem, not fixing it, so
+reverted it and addressed the actual architectural cause instead (see (1)-(4) above for the full
+diagnosis trail): `NavfnPlanner` has no concept of heading at all, so `FollowPath` was always
+handed a path whose arrival tangent could be arbitrarily different from the requested goal
+orientation, leaving `RegulatedPurePursuitController` to improvise a correction reactively -
+that reactive improvisation, not any single tunable parameter, was the real source of the
+oscillation. Tuning `progress_checker`, replanning rate, or `yaw_goal_tolerance` could only ever
+mask or reduce the symptom, not fix the mismatch between what the planner produces and what the
+controller is being asked to achieve.
+
+### Changed
+- **`config/nav2/nav2_params.yaml`**: `planner_server.GridBased.plugin` switched from
+  `nav2_navfn_planner/NavfnPlanner` to `nav2_smac_planner/SmacPlannerHybrid` - kinematically
+  aware of this car's real minimum turning radius, and with
+  `motion_model_for_search: "REEDS_SHEPP"` can plan an explicit reverse/K-turn segment into the
+  path itself when the goal orientation requires one (matching `allow_reversing: true` already
+  set in `FollowPath`), instead of leaving the controller to improvise. Configured with
+  `minimum_turning_radius: 0.5` (padded over the car's true ~0.445m physical minimum - wheelbase
+  0.25725m / tan(30deg max steer)); full parameter list and rationale in `TUNING.md` §4 and
+  `config/nav2/PARAMS_REFERENCE.md`.
+- **`config/nav2/nav2_params.yaml`**: `general_goal_checker.yaw_goal_tolerance` reverted from the
+  (4) workaround value of `2.9` rad back down to `0.3` rad - a real, meaningful tolerance, now
+  achievable without oscillation because the path itself should arrive close to the correct
+  heading rather than needing a large post-hoc correction.
+- **`package.xml`**: added `nav2_smac_planner` exec_depend.
+- **`TUNING.md`** / **`config/nav2/PARAMS_REFERENCE.md`**: updated the global-planner sections to
+  describe `SmacPlannerHybrid` and its parameters instead of the retired `NavfnPlanner`.
+
+### Known limitation
+- Not independently re-verified by Claude - this is a bigger structural change than the previous
+  parameter-only tuning attempts in this session, and has not yet been tested against a real
+  goal. `max_planning_time: 5.0`s and `angle_quantization_bins: 72` are reasonable starting
+  values for this map's small size, not empirically tuned - watch planner latency and path
+  quality on the first few real tests. If `0.3` rad `yaw_goal_tolerance` turns out too tight
+  (oscillation returns) or too loose (imprecise stops), that's the first knob to revisit before
+  touching the planner config again.
+
+## 2026-07-14 (4) - Sidestep goal-approach oscillation: loosen `yaw_goal_tolerance` drastically
+
+Follow-up to (3) - the `progress_checker` fix reduced abort-driven stalling but the user reported
+the robot still oscillates trying to correct final heading. Asked the user whether precise final
+heading actually matters for their use case; they confirmed only goal *position* matters, heading
+is fine "roughly." Given that, the pragmatic fix is to stop the goal checker from ever demanding
+a tight heading match, rather than continuing to chase RegulatedPurePursuitController's inherent
+difficulty converging a large final-heading mismatch without an explicit K-turn plan from the
+global planner (NavfnPlanner doesn't produce one - see the (1)/(2)/(3) entries above and
+`TUNING.md` SS4 for the architectural root of this: the real fix if heading precision is ever
+needed is `nav2_smac_planner`'s Hybrid-A*, a bigger change than parameter tuning can achieve).
+
+### Changed
+- **`config/nav2/nav2_params.yaml`**: `controller_server.general_goal_checker.yaw_goal_tolerance`
+  raised from `1.0` to `2.9` rad (~166 deg) - accepts essentially any arrival heading except one
+  almost exactly reversed from the requested orientation, so the oscillating correction maneuver
+  should now rarely/never trigger at all. Added an inline comment pointing back to this rationale
+  and to `TUNING.md` SS4 for the proper fix if heading precision becomes a requirement later.
+
+### Known limitation
+- Not independently re-verified by Claude - based on the user's own test goal, confirmed
+  requirement (position-only), and the accumulated diagnosis from the (1)-(3) entries above, not
+  a fresh live test in this session. Needs a relaunch and one more goal test to confirm the
+  oscillation is actually gone, not just less frequent.
+
 ## 2026-07-14 (3) - Real fix for goal-approach oscillation: `progress_checker` was aborting mid-maneuver
 
 Follow-up to the entry below (2). The replanning-rate slowdown did not fix the oscillation - user
