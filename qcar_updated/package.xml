@@ -12,6 +12,15 @@
   <depend>xacro</depend>
   <depend>robot_state_publisher</depend>
 
+  <!-- build + link deps for the custom EarlyCommitCritic MPPI plugin (src/critics/) -->
+  <depend>nav2_mppi_controller</depend>
+  <depend>nav2_costmap_2d</depend>
+  <depend>rclcpp</depend>
+  <depend>rclcpp_lifecycle</depend>
+  <depend>pluginlib</depend>
+  <depend>xtensor</depend>
+  <depend>xsimd</depend>
+
   <exec_depend>rclpy</exec_depend>
   <exec_depend>geometry_msgs</exec_depend>
   <exec_depend>joint_state_publisher</exec_depend>
@@ -20,7 +29,6 @@
   <exec_depend>nav2_bringup</exec_depend>
   <exec_depend>nav2_common</exec_depend>
   <exec_depend>nav2_smac_planner</exec_depend>
-  <exec_depend>nav2_mppi_controller</exec_depend>
   <exec_depend>cartographer_ros</exec_depend>
   <exec_depend>rviz2</exec_depend>
 
@@ -29,5 +37,6 @@
 
   <export>
     <build_type>ament_cmake</build_type>
+    <nav2_mppi_controller plugin="${prefix}/qcar_critics.xml" />
   </export>
 </package>

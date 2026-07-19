@@ -55,15 +55,6 @@ def generate_launch_description():
             output='screen'
         ),
         Node(
-            package='joint_state_publisher',
-            executable='joint_state_publisher',
-            output='screen',
-            parameters=[{
-                'use_sim_time': True,
-                'source_list': ['/joint_states']
-            }]
-        ),
-        Node(
             package='rviz2',
             executable='rviz2',
             name='rviz2',

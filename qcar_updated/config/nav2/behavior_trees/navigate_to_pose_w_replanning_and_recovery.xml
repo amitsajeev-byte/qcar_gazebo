@@ -1,51 +1,91 @@
 <!--
   Adapted from the stock nav2_bt_navigator tree navigate_to_pose_w_replanning_and_recovery.xml -
-  two changes from stock:
+  changes from stock:
 
   1. Removed <Spin> from RecoveryActions, since a pure in-place rotation is physically impossible
      for this Ackermann car (steering has no effect at zero linear velocity), so it was a
      guaranteed no-op recovery attempt that just burned its timeout.
 
-  2. RateController hz lowered from 1.0 to 0.2 (replan every 5s). This was tried once before and
-     reverted because it interacted badly with an impatient progress_checker (default
-     movement_time_allowance ~10s, required_linear_distance 0.5) - each "Failed to make progress"
-     abort then had to wait up to 5s for the next scheduled path before retrying, turning quick
-     retries into multi-minute stalls. nav2_params.yaml's progress_checker now has
-     movement_time_allowance: 30.0 and required_linear_distance: 0.1 (see CHANGELOG.md's
-     2026-07-14 (3) entry), which removes that interaction. Root cause confirmed via a live user
-     log: with SmacPlannerHybrid producing a correct K-turn path (see (5) below) but still
-     replanned every ~1s, "Passing new path to controller" fired roughly once per second
-     continuously, and the robot covered under 0.1m of net displacement across a full 30s
-     progress_checker window - each fresh 1Hz replan was interrupting the K-turn maneuver before
-     it could ever complete, not just producing a worse path. Slowing the rate gives one
-     maneuver attempt real uninterrupted time to finish.
-
-  A third change was tried and reverted - documented so it isn't retried blindly: switching to
-  "replan only if the path becomes invalid" (based on the stock
-  navigate_w_recovery_and_replanning_only_if_path_becomes_invalid.xml), to stop continuous
-  replanning at its source instead of just slowing it down. Real bug in this nav2 version:
-  IsPathValid returns SUCCESS on the default-constructed/empty {path} blackboard entry before
-  ComputePathToPose has ever run, so the Fallback skips ComputePathToPose entirely and FollowPath
-  receives an empty path forever ("Resulting plan has 0 poses in it", "Controller patience
-  exceeded", eventual navigation failure - confirmed via direct testing). Do not reattempt this
-  without first fixing that empty-path fallthrough (e.g. an unconditional first
-  ComputePathToPose before entering the conditional-replan loop) and testing it live.
+  2. Replan only if the path actually becomes invalid (obstacle appears) or the goal changes,
+     instead of blindly discarding and recomputing on a fixed timer. History, so this isn't
+     rediscovered/reverted blindly again:
+     - Stock behavior (1Hz unconditional replan): a live user log showed "Passing new path to
+       controller" firing every ~1s while the robot tried to execute a K-turn, covering under
+       0.1m of net displacement across a full 30s progress_checker window - each replan was
+       interrupting the maneuver before it could ever complete.
+     - First mitigation (2026-07-15): lowered RateController to 0.2Hz (replan every 5s) instead of
+       removing blind replanning at its source. Bought some goals more time, but a live-tested
+       goal requiring a longer path (~2m) AND a large final reorientation (~180deg) still hit the
+       same "Failed to make progress" / replan / repeat cycle every ~30s, indefinitely, because
+       5s still wasn't enough uninterrupted time for that harder case to converge (see
+       CHANGELOG.md 2026-07-19).
+     - "Replan only if the path becomes invalid" (based on stock
+       navigate_w_recovery_and_replanning_only_if_path_becomes_invalid.xml) was tried once before
+       this and reverted: IsPathValid returns SUCCESS on the default-constructed/empty {path}
+       blackboard entry before ComputePathToPose has ever run, so the conditional Fallback below
+       would skip ComputePathToPose entirely and FollowPath would receive an empty path forever
+       ("Resulting plan has 0 poses in it").
+     - Fixed properly this time by adding an unconditional FIRST ComputePathToPose
+       (InitialComputePathToPose below), guaranteed to populate {path} with a real plan before the
+       conditional IsPathValid check is ever reached.
+     - First attempt at this used nav2_behavior_tree's SingleTrigger decorator inside a
+       <Fallback>/<AlwaysSuccess> wrapper to get "run once" semantics, and made things far worse:
+       live-tested and found /plan publishing at ~33Hz (every ~30ms) instead of once. Root cause,
+       confirmed via BT.CPP v3's actual source
+       (BehaviorTree.CPP/src/controls/fallback_node.cpp, tag 3.8.6): a plain <Fallback>, when its
+       active child returns SUCCESS, calls `resetChildren()` (halting every child back to IDLE)
+       before returning - and SingleTrigger re-arms its own one-shot flag whenever ITS status is
+       IDLE at tick-start (single_trigger_node.cpp). So each time the Fallback resolved to SUCCESS,
+       it silently reset SingleTrigger back to "fire again," and PipelineSequence re-ticks this
+       whole branch every ~10ms regardless - net result: unconditional replanning, continuously,
+       far worse than the original 1Hz/0.2Hz blind-replan problem this file exists to fix.
+     - Fixed by dropping SingleTrigger/Fallback entirely and using a plain <Sequence> instead
+       (confirmed via BT.CPP v3's sequence_node.cpp): unlike Fallback/PipelineSequence, a plain
+       Sequence keeps `current_child_idx_` as persistent state across ticks and does NOT restart
+       from index 0 or reset already-succeeded children while a later child is still RUNNING - it
+       only calls `resetChildren()` on the whole Sequence's own overall FAILURE or full completion.
+       So InitialComputePathToPose (child 0) runs exactly once, then is skipped on every later tick
+       for as long as the inner PipelineSequence (child 1, wrapping the replan-gate + FollowPath)
+       keeps returning RUNNING - no custom "run once" node needed at all. Re-arms correctly on a
+       genuinely new attempt because RecoveryNode's tick() calls `haltChild(0)` before every retry,
+       and Sequence::halt() resets `current_child_idx_` back to 0.
+     - Once {path} is guaranteed non-empty, IsPathValid does real, ongoing collision-validity
+       checking against the live costmap - a static map with no new obstacles just keeps
+       succeeding indefinitely, letting FollowPath run for as long as an in-progress maneuver
+       actually needs instead of getting cut off on an arbitrary timer. RateController is restored
+       to the stock 1.0Hz here since it now only gates a cheap validity check, not a real replan -
+       previously it had to be kept slow specifically because every tick was a full, disruptive
+       recompute.
 -->
 <root main_tree_to_execute="MainTree">
   <BehaviorTree ID="MainTree">
     <RecoveryNode number_of_retries="6" name="NavigateRecovery">
-      <PipelineSequence name="NavigateWithReplanning">
-        <RateController hz="0.2">
-          <RecoveryNode number_of_retries="1" name="ComputePathToPose">
-            <ComputePathToPose goal="{goal}" path="{path}" planner_id="GridBased"/>
-            <ClearEntireCostmap name="ClearGlobalCostmap-Context" service_name="global_costmap/clear_entirely_global_costmap"/>
-          </RecoveryNode>
-        </RateController>
-        <RecoveryNode number_of_retries="1" name="FollowPath">
-          <FollowPath path="{path}" controller_id="FollowPath"/>
-          <ClearEntireCostmap name="ClearLocalCostmap-Context" service_name="local_costmap/clear_entirely_local_costmap"/>
+      <Sequence name="NavigateOuter">
+        <RecoveryNode number_of_retries="1" name="InitialComputePathToPose">
+          <ComputePathToPose goal="{goal}" path="{path}" planner_id="GridBased"/>
+          <ClearEntireCostmap name="ClearGlobalCostmap-InitialContext" service_name="global_costmap/clear_entirely_global_costmap"/>
         </RecoveryNode>
-      </PipelineSequence>
+        <PipelineSequence name="NavigateWithReplanning">
+          <RateController hz="1.0">
+            <RecoveryNode number_of_retries="1" name="ComputePathToPose">
+              <Fallback name="ReplanOnlyIfInvalid">
+                <ReactiveSequence name="CheckIfNewPathNeeded">
+                  <Inverter>
+                    <GlobalUpdatedGoal/>
+                  </Inverter>
+                  <IsPathValid path="{path}"/>
+                </ReactiveSequence>
+                <ComputePathToPose goal="{goal}" path="{path}" planner_id="GridBased"/>
+              </Fallback>
+              <ClearEntireCostmap name="ClearGlobalCostmap-Context" service_name="global_costmap/clear_entirely_global_costmap"/>
+            </RecoveryNode>
+          </RateController>
+          <RecoveryNode number_of_retries="1" name="FollowPath">
+            <FollowPath path="{path}" controller_id="FollowPath"/>
+            <ClearEntireCostmap name="ClearLocalCostmap-Context" service_name="local_costmap/clear_entirely_local_costmap"/>
+          </RecoveryNode>
+        </PipelineSequence>
+      </Sequence>
       <ReactiveFallback name="RecoveryFallback">
         <GoalUpdated/>
         <RoundRobin name="RecoveryActions">

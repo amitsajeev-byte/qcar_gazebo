@@ -9,9 +9,13 @@ tuning guide.
 
 - `set_initial_pose: true` / `initial_pose: {x,y,z,yaw}` - seeds AMCL with a starting pose
   (0,0,0,0) at startup instead of requiring a manual "2D Pose Estimate" click in RViz first.
-- `alpha1`-`alpha5` (`0.2` each) - odometry motion noise coefficients (see `TUNING.md` §5).
-  Higher = particles spread out more per unit of motion, correcting faster from odometry error
-  but with noisier pose estimates.
+- `alpha1`-`alpha5` (`0.4` each, raised from `0.2` as of 2026-07-15 (2)) - odometry motion noise
+  coefficients (see `TUNING.md` §5). Higher = particles spread out more per unit of motion,
+  correcting faster from odometry error but with noisier pose estimates. Raised after live-
+  measuring `map -> odom` TF jumps of up to 7cm/2.3deg in a single 0.2s step during goal-approach
+  reorientation maneuvers (K-turns with reversing) - real wheel odometry drift during tight/
+  reversing motion apparently exceeds what `0.2` assumed, so AMCL underestimated uncertainty
+  between scan-match updates and had to correct in large, sudden jumps.
 - `base_frame_id: "base"` - the robot body TF frame AMCL tracks.
 - `beam_skip_distance` / `beam_skip_error_threshold` / `beam_skip_threshold` / `do_beamskip`
   (`false`) - an optimization that skips individual laser beams that disagree with the map
@@ -57,8 +61,11 @@ tuning guide.
   computing pose internally).
 - `transform_tolerance: 1.0` - how far into the future (s) the published TF is post-dated,
   giving consumers a buffer against small timing jitter.
-- `update_min_a` (`0.2` rad) / `update_min_d` (`0.25` m) - minimum rotation/translation since the
-  last update before AMCL bothers re-localizing against a new scan.
+- `update_min_a` (`0.1` rad) / `update_min_d` (`0.15` m) - minimum rotation/translation since the
+  last update before AMCL bothers re-localizing against a new scan. Lowered from `0.2`/`0.25` as
+  of 2026-07-15 (2), paired with the `alpha1`-`alpha5` increase above - re-localizes more often
+  (smaller corrections each time) rather than accumulating more drift between updates and
+  correcting in a single larger jump.
 - `z_hit` (`0.5`) / `z_short` (`0.05`) / `z_max` (`0.05`) / `z_rand` (`0.5`) - mixture weights of
   the laser model's four components (hit-obstacle, unexpected-short-reading, max-range-reading,
   random-noise); must sum to ~1. Here it's a 50/50 blend of "trust clean hits" and "assume a lot
@@ -107,25 +114,138 @@ tuning guide.
 - `FollowPath` (`MPPIController` as of 2026-07-14 (9), replacing `RegulatedPurePursuitController`
   - see `TUNING.md` §2 for the full rationale and the accuracy-relevant parameters): `time_steps:
   56` / `model_dt: 0.05` / `batch_size: 2000` (core sampling parameters - trajectory horizon
-  length, timestep size, and number of candidate trajectories sampled per control cycle),
+  length, timestep size, and number of candidate trajectories sampled per control cycle.
+  `batch_size` raised to `2500`/`3500` and live-tested on 2026-07-19 (4) as a fix for path-
+  tracking looseness (see `PathAlignCritic.cost_weight` below for the critic-weight attempt that
+  didn't work) - genuinely tightened tracking, reproducibly, but the extra CPU cost degraded
+  control-loop timing enough near the goal that one otherwise-normal run took 4.5 minutes to
+  converge instead of ~30s; reverted to `2000` - see `CHANGELOG.md` 2026-07-19 (4) for the full
+  trial data),
   `vx_std` / `vy_std` / `wz_std: 0.2 / 0.0 / 0.4` (sampling noise standard deviation per axis -
-  `vy_std: 0.0` since this is non-holonomic), `vx_max` / `vx_min: 0.3 / -0.2` (forward/reverse
-  speed limits), `vy_max: 0.0` (no lateral motion), `wz_max: 1.9` (max angular velocity
-  considered), `iteration_count: 1` (single optimization pass per control cycle - raising this
-  trades CPU for trajectory quality), `prune_distance: 1.7` m (how far ahead along the path is
-  considered for cost evaluation), `transform_tolerance: 0.1` s (TF lookup slack),
-  `temperature: 0.3` / `gamma: 0.015` (MPPI's own softmax-weighting and control-cost trade-off
-  parameters - core to the algorithm, not typically hand-tuned without deeper MPPI familiarity),
-  `motion_model: "Ackermann"` / `AckermannConstraints.min_turning_r: 0.5` (see `TUNING.md` §2 for
-  why this replaces RPP's kinematic assumptions), `visualize: false` (disables publishing sampled
-  trajectory markers for RViz debug view - enable temporarily if you want to see what MPPI is
-  actually considering each cycle), `enforce_path_inversion: true` /
-  `inversion_xy_tolerance: 0.2` / `inversion_yaw_tolerance: 0.4` (dedicated cusp/reversal handling
-  - without `enforce_path_inversion`, MPPI does not correctly treat a path with a direction
-  change as "drive to the cusp, then continue past it," which was the actual cause of the robot
-  not following the planned path at all right after the initial MPPI switch - see `TUNING.md` §2
-  and `CHANGELOG.md`'s 2026-07-14 (10) entry), `critics: [...]` (which cost functions score each
-  candidate trajectory - see `TUNING.md` §2 for the list and what each does).
+  `vy_std: 0.0` since this is non-holonomic; these are the plugin's shipped defaults. Briefly
+  lowered to `0.15`/`0.3` on 2026-07-18 after the user recorded and shared video evidence of the
+  robot deviating from the planned path mid-trip - tighter sampling meant less "wobble," but
+  restored to the defaults on 2026-07-19 (2) after live-testing traced a *different, worse* bug to
+  the tightening: MPPI samples each cycle's candidate trajectories as noise added to the
+  *previous* cycle's control sequence (`Optimizer::shiftControlSequence()`,
+  `nav2_mppi_controller/src/optimizer.cpp`), so once that sequence collapsed toward near-zero
+  velocity on a demanding goal, tighter noise made it measurably harder to sample anything far
+  enough from "near zero" to escape - a self-reinforcing freeze with no way out short of a full
+  `Optimizer::reset()`. If wobble reappears, prefer tuning `PathAlignCritic`/`PathFollowCritic`
+  over re-tightening these - see `CHANGELOG.md` 2026-07-19 (2)), `vx_max` /
+  `vx_min: 0.3 / -0.2` (forward/reverse speed limits), `vy_max: 0.0` (no lateral motion),
+  `wz_max: 1.9` (max angular velocity considered), `iteration_count: 2` (raised from the default
+  `1` on 2026-07-19 (2), alongside the sampling-noise restoration above - a second optimization
+  pass per control cycle lets MPPI refine away from a bad warm-started sequence within the same
+  cycle rather than relying on next-cycle sampling luck; doubles per-cycle optimizer CPU cost,
+  live-verified to still fit within `controller_frequency`'s 50ms budget, though it does produce
+  occasional "Control loop missed its desired rate" warnings under load), `prune_distance: 1.7` m
+  (how far ahead along the path is considered for cost evaluation), `transform_tolerance: 0.1` s
+  (TF lookup slack), `temperature: 0.3` / `gamma: 0.015` (MPPI's own softmax-weighting and
+  control-cost trade-off parameters - core to the algorithm, not typically hand-tuned without
+  deeper MPPI familiarity), `motion_model: "Ackermann"` / `AckermannConstraints.min_turning_r:
+  0.5` (this vehicle's true hard turning-radius limit - see `TUNING.md` §2 for why this replaces
+  RPP's kinematic assumptions, and `planner_server.GridBased.minimum_turning_radius` below for why
+  this is deliberately *not* kept equal to the planner's own minimum anymore), `visualize: true`
+  (enabled 2026-07-18 (4) at user request - publishes two debug-only topics for RViz,
+  `/trajectories` (every sampled candidate trajectory plus the chosen optimal one, each control
+  cycle) and `transformed_global_plan` (the local, controller-side portion of the plan MPPI is
+  actively tracking); adds marker-array publishing overhead, so turn back off for normal
+  (non-debugging) runs), `enforce_path_inversion: true` / `inversion_xy_tolerance: 0.2` /
+  `inversion_yaw_tolerance: 0.4` (dedicated cusp/reversal handling - without
+  `enforce_path_inversion`, MPPI does not correctly treat a path with a direction change as
+  "drive to the cusp, then continue past it," which was the actual cause of the robot not
+  following the planned path at all right after the initial MPPI switch - see `TUNING.md` §2 and
+  `CHANGELOG.md`'s 2026-07-14 (10) entry), `critics: [...]` (which cost functions score each
+  candidate trajectory - see `TUNING.md` §2 for the list and what each does; now includes the
+  custom `EarlyCommitCritic` alongside the stock nav2 critics - see below).
+
+  **Per-critic parameter overrides** (defaults verified directly against the Humble source,
+  `github.com/ros-navigation/navigation2` humble branch `nav2_mppi_controller/src/critics/`,
+  rather than guessed, since the local headers only expose parameter names, not default values):
+  - `EarlyCommitCritic` - a custom critic defined in *this* package (`src/critics/
+    early_commit_critic.cpp`, class `mppi::critics::EarlyCommitCritic`, deliberately declared in
+    namespace `mppi::critics` rather than `qcar_updated::critics` - `CriticManager::getFullName()`
+    hardcodes that prefix when resolving names from the `critics:` list, so any other namespace
+    is unreachable regardless of how it's exported via pluginlib), added 2026-07-18 (9) - see
+    `CHANGELOG.md` for the full investigation. Scores only the first `early_time_steps` (`10`) of
+    each sampled trajectory against the bearing to the path point `offset_from_furthest` (`3`)
+    indices ahead of current progress, with no `threshold_to_consider`/`max_angle_to_furthest`
+    gate (unlike stock `PathAngleCritic`) - makes MPPI commit to the path's initial curvature from
+    the very first control cycle instead of settling into a near-straight local optimum that never
+    corrects. `active_path_points: 8` (lowered from `15` on 2026-07-19 (5)) gates it off once the
+    robot has progressed past the first 8 path points - live-tested with no such gate at all and
+    it broke ordinary path-following for the rest of the trip, since this critic's fixed near-term
+    target stops being a meaningful signal once real progress has been made. Lowered from the
+    original `15` after a safety-relevant report (robot turning before the planned curve, risking
+    obstacle contact): on a goal whose path ran straight for ~1m before curving, the curve started
+    around path point 15-16 - inside the old 15-point window - so this highest-weighted, ungated
+    critic reached toward the curve well before the vehicle got there (live-measured lateral
+    position up to 3x the planned value at matching points). `8` measurably reduced this (~1.9x at
+    the same point) without regressing the original curve-at-trip-start case. See `CHANGELOG.md`
+    2026-07-19 (5). `forward_preference: false` (added 2026-07-19) - a
+    `SmacPlannerHybrid` Reeds-Shepp path can require a reverse (K-turn) segment anywhere a sharp
+    reorientation is needed, not just at trip start; at `false` the critic scores yaw against
+    whichever of (bearing-to-target, bearing-to-target + 180deg) is closer - the same "reversing
+    allowed" convention as `nav2_mppi_controller`'s own `utils::posePointAngle()` - instead of
+    assuming forward-only travel and fighting a correct reverse maneuver, which was live-confirmed
+    (via a `/plan` dump mid-stall) to freeze the robot again later in a trip, the same way the
+    ungated version once froze it at trip start. See `CHANGELOG.md` 2026-07-19 (1). `cost_weight:
+    15.0`.
+  - `CostCritic.consider_footprint: true` - defaults to `false` upstream; collision/obstacle cost
+    was otherwise evaluated at the robot's center point only, not its actual elongated footprint,
+    a real bug and a plausible direct cause of corner-cutting near obstacles for a car-shaped
+    robot. See `CHANGELOG.md` 2026-07-14 (11).
+  - `GoalCritic.cost_weight: 8.0` - raised from the default `5.0`; final position was reported
+    inaccurate (outside the `xy_goal_tolerance`) even when nav2 considered the goal "reached."
+    Strengthens convergence to the exact goal point within `GoalCritic`'s `1.4m`
+    `threshold_to_consider`, relative to `PathAlignCritic`'s competing weight of `10.0` over the
+    same final approach.
+  - `GoalAngleCritic.cost_weight: 10.0` - raised from the default `3.0` on 2026-07-18 (5); fixes
+    "robot doesn't move when given a new goal that's mostly a reorientation" (e.g. re-sending the
+    same position with a different final yaw shortly after reaching a goal). Root cause: `PathAlign`/
+    `PathFollow`/`PathAngle` Critic all gate on the robot's *current* distance to the goal, not
+    progress along the plan - when a new goal sits at (near) the robot's current position, that
+    distance is ~0 from the first control cycle, disabling all three for the entire maneuver, and
+    combined with `ConstraintCritic`'s turning-radius penalty, the default-weight `GoalAngleCritic`
+    alone was too weak to pull MPPI out of a near-zero-velocity local optimum (an Ackermann vehicle
+    cannot change heading at zero linear velocity). `30.0` was tried first and fixed the
+    reorientation case but regressed a normal goal's final approach; `10.0` was live-tested clean
+    on both. Converts a permanent hang into an eventual, automatic (`progress_checker` + recovery)
+    convergence, rather than a fully clean instant fix - the underlying critic-gating gap is still
+    present.
+  - `PathFollowCritic.threshold_to_consider: 0.15` (lowered from `0.5` on 2026-07-18 (5)) - shrinks
+    the window, near the end of a normal (non-reorientation) approach, where the planned path stops
+    being enforced before goal-focused critics take over. Does **not** fix the reorientation-in-
+    place bug above - confirmed via live testing this has zero effect there, since that bug's gate
+    is already ~0 regardless of the threshold's value.
+  - `PathFollowCritic.offset_from_furthest: 3` (lowered from the default `6`) - this critic pulls
+    each sampled trajectory's endpoint toward the path point this many indices ahead of current
+    progress; too far ahead can land past the start of an upcoming curve, pulling the executed
+    heading toward that curve before the robot has physically reached it (reported live as
+    "turning early").
+  - `PathAngleCritic.offset_from_furthest: 2` (lowered from the default `4`) - same reasoning and
+    mechanism as `PathFollowCritic` above, but for heading rather than position: steers the
+    robot's heading toward the path point this many indices ahead, the more direct cause of
+    visibly "turning early" into a curve.
+  - `PathAlignCritic.offset_from_furthest: 3` (lowered from the default `20` on 2026-07-18 (3)) -
+    works differently here than in `PathFollowCritic`/`PathAngleCritic` above: it's a gate, not a
+    look-ahead target (`if (path_segments_count < offset_from_furthest_) return;`), so
+    `PathAlignCritic` (the highest-weighted critic in use, at `10.0`) was completely inactive for
+    the first `offset_from_furthest` path points of every trip - if a curve starts early in the
+    planned path, the strongest path-adherence critic simply wasn't running yet during that
+    segment.
+  - `PathAlignCritic.threshold_to_consider: 0.15` (lowered from `0.5` on 2026-07-18 (5)) - same
+    reasoning and same "does not fix the reorientation-in-place bug" caveat as
+    `PathFollowCritic.threshold_to_consider` above.
+  - `PathAlignCritic.cost_weight: 10.0` - the stock default, left explicit after a 2026-07-19 (3)
+    investigation into corner-cutting (the robot tracking a looser curve than the plan calls for,
+    a real side effect of the wider `vx_std`/`wz_std` restored above). Raising this weight (`12.0`,
+    `14.0`) was live-tested and did **not** produce a reliable fix - results didn't order sensibly
+    with the weight (higher values overshot the *other* direction and stalled, and a repeat run at
+    the default swung wider still than either), indicating run-to-run MPPI sampling variance at
+    this wider noise setting, not this weight, dominates the outcome. See `CHANGELOG.md`
+    2026-07-19 (3).
 
 ## `smoother_server`
 
@@ -155,13 +275,27 @@ tuning guide.
   `angle_quantization_bins: 72` (5deg heading resolution in the search space),
   `analytic_expansion_ratio: 3.5` / `analytic_expansion_max_length: 3.0` (tuning for the
   shortcut/analytic-expansion optimization that tries a direct Reeds-Shepp curve to the goal
-  before falling back to full graph search), `minimum_turning_radius: 0.5` m (padded over the
-  car's true ~0.445m physical minimum - see `TUNING.md` §4 for the derivation),
+  before falling back to full graph search), `minimum_turning_radius: 0.7` m (padded over the
+  car's true ~0.445m physical minimum - see `TUNING.md` §4 for the derivation. Raised from `0.5`
+  on 2026-07-19 (2) - `0.5` exactly matched `FollowPath.AckermannConstraints.min_turning_r` (the
+  controller's own hard limit), which sounds safe but isn't: the planner was then free to produce
+  curves at exactly the tightest radius MPPI is allowed to drive, leaving MPPI's randomly sampled
+  candidate trajectories zero margin - live-confirmed via a circle fit on a real `/plan` dump
+  (fitted radius `0.49999999m`, dead on the minimum) that the robot froze on. `0.7` here vs `0.5`
+  in the controller gives every planned curve real slack before it's anywhere near what MPPI
+  actually treats as too tight - see `CHANGELOG.md` 2026-07-19 (2)),
   `reverse_penalty: 4.0` (raised from `2.0` - discourages planning a reverse segment unless the
   goal orientation truly requires one, minimizing unnecessary reversing) /
-  `non_straight_penalty: 1.2` / `change_penalty: 0.0` / `cost_penalty: 2.0` /
+  `non_straight_penalty: 1.2` / `change_penalty: 3.0` / `cost_penalty: 2.0` /
   `retrospective_penalty: 0.025` (search cost weights shaping path preference - see `TUNING.md`
-  §4 for which to adjust for which symptom), `lookup_table_size: 20.0` (size of the precomputed
+  §4 for which to adjust for which symptom; `change_penalty` raised from the default `0.0` on
+  2026-07-18 (7) - `node_hybrid.cpp`'s own comment on this term is literally "penalizes
+  wiggling," applied whenever consecutive motion primitives change turning direction. At `0.0`
+  there was no cost at all for the planner inserting a short, unnecessary direction-changing
+  segment - observed live as a small reversal immediately followed by forward motion, right at
+  the start of nearly every plan whose initial heading doesn't already match the path tangent,
+  which was driving a "stuck at path start" symptom that turned out to be a planner issue, not an
+  MPPI tuning one), `lookup_table_size: 20.0` (size of the precomputed
   motion-primitive distance heuristic table), `cache_obstacle_heuristic: false` (recompute the
   obstacle heuristic fresh each planning call rather than caching between calls - safer given
   costmaps update from live sensor data), `smooth_path: true` (planner's own internal smoothing -
