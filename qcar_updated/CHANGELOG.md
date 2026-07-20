@@ -1,5 +1,40 @@
 # Changelog
 
+## 2026-07-20 - User-tuned fix for goal accuracy: `minimum_turning_radius` 0.7 -> 1.0 paired with `yaw_goal_tolerance` 0.3 -> 0.5
+
+User made these two changes directly (hands-on investigation, per their own request in the prior
+session to be pointed at the relevant parameters rather than have further automated tuning done
+for them) and confirmed the robot now navigates to goals "almost accurately" - a clear, real-world
+improvement over the prior committed config.
+
+### Changed
+- **`config/nav2/nav2_params.yaml`**: `planner_server.GridBased.minimum_turning_radius` raised
+  from `0.7` to `1.0`.
+- **`config/nav2/nav2_params.yaml`**: `controller_server.FollowPath.general_goal_checker.
+  yaw_goal_tolerance` widened from `0.3` to `0.5`.
+
+### Reconciling with the earlier, contradictory finding
+2026-07-19 (2)/(3) documented live-testing `minimum_turning_radius: 1.0` on its own (with
+`yaw_goal_tolerance` still at `0.3`) and finding it made a K-turn reproduction goal *worse* - the
+same reversal/loop-path shape as `0.7`, just scaled up to a wider swing. That result isn't wrong,
+but it was only ever tested as a single-parameter change. This entry changes both parameters
+together, and the combination behaves differently: the working hypothesis is that a looser final-
+heading tolerance means `general_goal_checker` no longer demands the tight exact-heading match
+that was pushing the planner toward the extreme loop-and-reverse maneuver in the first place -
+loosening `yaw_goal_tolerance` removes the pressure that made a larger `minimum_turning_radius`
+counterproductive on its own. Not independently re-verified by Claude with a repeat-trial harness
+(this was the user's own direct hands-on testing, not the multi-trial methodology used earlier in
+this session for MPPI-noise-sensitive parameters) - if goal accuracy regresses on some other goal
+shape, that's the first thing to check.
+
+### Known limitation
+- No quantitative multi-trial data (position/heading error, deviation) was captured for this
+  change, unlike several other entries in this file - it's a real, user-confirmed qualitative
+  improvement ("almost accurate"), not yet backed by the same rigorous measurement used for e.g.
+  the 2026-07-19 (4) batch_size investigation. If further tuning is done on top of this, consider
+  building the same repeatable trial harness before drawing conclusions, given how much MPPI/
+  planner run-to-run variance has bitten single-run comparisons earlier in this project.
+
 ## 2026-07-19 (5) - Root-caused and fixed "robot turns before the curve" - `EarlyCommitCritic` window too wide
 
 User reported the robot turning before the planned curve actually starts and deviating enough

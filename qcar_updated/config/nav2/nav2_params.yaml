@@ -162,7 +162,18 @@ controller_server:
       # arrive much closer to the true requested orientation, so a real tolerance should be
       # achievable without the previous oscillation. Start here and tighten further once verified
       # - see the 2026-07-14 entries in CHANGELOG.md for the full diagnosis history.
-      yaw_goal_tolerance: 0.3
+      #
+      # Widened from 0.3 to 0.5 by the user directly (hands-on tuning, 2026-07-20), together with
+      # planner_server.GridBased.minimum_turning_radius raised to 1.0 below - user-confirmed this
+      # combination navigates to goals "almost accurately," a clear improvement. Note this
+      # contradicts an earlier single-parameter finding: minimum_turning_radius: 1.0 tested alone
+      # (yaw_goal_tolerance still at 0.3) previously live-tested WORSE on a K-turn goal (same
+      # reversal pattern, wider swing - see CHANGELOG.md 2026-07-19 (2)/(3) history and that
+      # parameter's own comment below). Likely explanation: a looser final-heading tolerance means
+      # the goal checker no longer demands the tight exact-heading match that was forcing the
+      # extreme loop-and-reverse maneuver minimum_turning_radius: 1.0 alone made worse - the two
+      # values interact, so change them together, not independently. See CHANGELOG.md 2026-07-20.
+      yaw_goal_tolerance: 0.5
     # MPPIController (not RegulatedPurePursuitController) as of 2026-07-14 (9) - see
     # CHANGELOG.md. RPP's lookahead-point pure-pursuit geometry has a real, confirmed-via-live-
     # testing instability at path cusps (reverse/direction-change points) in this Humble nav2
@@ -483,7 +494,16 @@ planner_server:
       # (planner) vs 0.5 (controller, unchanged - see AckermannConstraints.min_turning_r below)
       # gives every planned curve real slack before it's anywhere near what MPPI actually treats
       # as too tight. See CHANGELOG.md 2026-07-19 (2).
-      minimum_turning_radius: 0.7
+      #
+      # Raised further, 0.7 -> 1.0, by the user directly (hands-on tuning, 2026-07-20), paired
+      # with general_goal_checker.yaw_goal_tolerance widened to 0.5 above. User-confirmed this
+      # combination reaches goals "almost accurately." This value alone (1.0, with
+      # yaw_goal_tolerance still at 0.3) was previously live-tested in this session and found
+      # WORSE on a K-turn reproduction goal - same reversal/loop shape as at 0.7, just scaled to a
+      # wider swing (y to -0.41 vs -0.25). That test only varied this one parameter; it did not
+      # test it together with the looser yaw tolerance. Change these two together if retuning -
+      # see CHANGELOG.md 2026-07-20.
+      minimum_turning_radius: 1.0
       # raised from 2.0 - makes the planner prefer a forward-only route even if longer, only
       # actually planning a reverse segment when the goal orientation truly can't be reached
       # forward-only. Fewer cusps encountered in practice = fewer chances to hit the residual

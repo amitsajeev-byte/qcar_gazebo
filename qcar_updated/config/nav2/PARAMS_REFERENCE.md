@@ -109,8 +109,9 @@ tuning guide.
   2026-07-14 (3) entry.
 - `general_goal_checker` (`SimpleGoalChecker`): `stateful: true` (once within tolerance, stays
   "reached" even if it drifts back out - avoids flapping), `xy_goal_tolerance: 0.12` m (widened
-  slightly from `0.1` on 2026-07-15 (3) - see `TUNING.md` §3), `yaw_goal_tolerance: 0.3` rad
-  (~17°) - see `TUNING.md` §3.
+  slightly from `0.1` on 2026-07-15 (3) - see `TUNING.md` §3), `yaw_goal_tolerance: 0.5` rad
+  (~29°, widened from `0.3` by the user's own hands-on tuning on 2026-07-20, paired with
+  `minimum_turning_radius` below - see `TUNING.md` §3 and `CHANGELOG.md` 2026-07-20).
 - `FollowPath` (`MPPIController` as of 2026-07-14 (9), replacing `RegulatedPurePursuitController`
   - see `TUNING.md` §2 for the full rationale and the accuracy-relevant parameters): `time_steps:
   56` / `model_dt: 0.05` / `batch_size: 2000` (core sampling parameters - trajectory horizon
@@ -275,15 +276,19 @@ tuning guide.
   `angle_quantization_bins: 72` (5deg heading resolution in the search space),
   `analytic_expansion_ratio: 3.5` / `analytic_expansion_max_length: 3.0` (tuning for the
   shortcut/analytic-expansion optimization that tries a direct Reeds-Shepp curve to the goal
-  before falling back to full graph search), `minimum_turning_radius: 0.7` m (padded over the
+  before falling back to full graph search), `minimum_turning_radius: 1.0` m (padded over the
   car's true ~0.445m physical minimum - see `TUNING.md` §4 for the derivation. Raised from `0.5`
-  on 2026-07-19 (2) - `0.5` exactly matched `FollowPath.AckermannConstraints.min_turning_r` (the
-  controller's own hard limit), which sounds safe but isn't: the planner was then free to produce
-  curves at exactly the tightest radius MPPI is allowed to drive, leaving MPPI's randomly sampled
-  candidate trajectories zero margin - live-confirmed via a circle fit on a real `/plan` dump
-  (fitted radius `0.49999999m`, dead on the minimum) that the robot froze on. `0.7` here vs `0.5`
-  in the controller gives every planned curve real slack before it's anywhere near what MPPI
-  actually treats as too tight - see `CHANGELOG.md` 2026-07-19 (2)),
+  to `0.7` on 2026-07-19 (2) - `0.5` exactly matched `FollowPath.AckermannConstraints.min_turning_r`
+  (the controller's own hard limit), which sounds safe but isn't: the planner was then free to
+  produce curves at exactly the tightest radius MPPI is allowed to drive, leaving MPPI's randomly
+  sampled candidate trajectories zero margin - live-confirmed via a circle fit on a real `/plan`
+  dump (fitted radius `0.49999999m`, dead on the minimum) that the robot froze on. `0.7` gave every
+  planned curve real slack vs `0.5` in the controller. Raised further to `1.0` by the user's own
+  hands-on tuning on 2026-07-20, paired with `general_goal_checker.yaw_goal_tolerance` widened to
+  `0.5` above - user-confirmed this combination reaches goals "almost accurately." Note:
+  `1.0` tested alone (yaw tolerance still `0.3`) previously measured *worse* than `0.7` on a
+  K-turn goal - see `CHANGELOG.md` 2026-07-20 for why the pairing behaves differently. Change these
+  two together, not independently),
   `reverse_penalty: 4.0` (raised from `2.0` - discourages planning a reverse segment unless the
   goal orientation truly requires one, minimizing unnecessary reversing) /
   `non_straight_penalty: 1.2` / `change_penalty: 3.0` / `cost_penalty: 2.0` /
