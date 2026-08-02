@@ -1,5 +1,84 @@
 # Changelog
 
+## 2026-08-02 - Investigated "robot deviates mid-curve, corrects by curve end" on a large-reorientation goal - five parameters tested, none fixed it
+
+User reported a specific symptom on a real goal from their own session (`(-0.0005, -2.014, 180deg)`
+from the origin, log: `Setting goal pose: Frame:map, Position(-0.000466228, -2.01385, 0),
+Orientation(0, 0, 1, 6.12323e-17) = Angle: 3.14159`): the robot turns more than the curve needs,
+deviates from the plan, then corrects back by the time the curve/maneuver completes - not a goal
+failure, but a real tracking-accuracy complaint. User did their own hands-on testing across four
+parameters first (steering PID `kd`, `PathFollowCritic`/`PathAngleCritic.offset_from_furthest`,
+`PathAlignCritic.cost_weight`) and reported no meaningful change each time - this entry reproduces
+their exact goal directly and tests a fifth parameter with a repeatable measurement harness, to get
+past "no difference" as a subjective impression and into actual numbers.
+
+### Reproduction and measurement method
+Isolated headless test (separate `ROS_DOMAIN_ID`/`GAZEBO_MASTER_URI` from the user's own running
+session, never interfered with it), the user's exact goal, a Python `/odom` + `/plan` subscriber
+capturing every distinct plan snapshot with a timestamp (not just the latest, which was a real bug
+in the first pass of this investigation - a mid-maneuver replan was being compared against
+early-trajectory samples, producing meaningless numbers). Metric: nearest-point distance from each
+`/odom` sample to whichever `/plan` snapshot was active at that moment.
+
+### What's actually happening, measured
+- The planned path itself is a single smooth, continuously-curving forward arc (radius of
+  curvature ~constant via a 3-point circle fit at every plan point) - not a K-turn, not a kinked
+  planner artifact. One small 2-point wiggle right at the very start (residual of the
+  known/accepted `change_penalty` case), nothing else.
+- Position deviation from the plan rises smoothly to a real, repeatable peak of **0.44m**
+  roughly 60-70% of the way through the maneuver (not at the very start), then converges back to
+  ~0.11-0.13m as the robot settles near the goal - this is the real mechanism behind "deviates,
+  then corrects."
+- At peak deviation, the robot was ~0.9-1.0m from the goal position - within a plausible default
+  gating range for goal-proximity critics, which is what motivated the `GoalAngleCritic` test
+  below.
+- A signed heading-vs-local-path-tangent measurement was attempted but abandoned as unreliable
+  here: the nearest-plan-point tangent becomes a poor reference exactly when deviation is largest
+  (the point genuinely closest to a badly-off-track position isn't necessarily "the point the
+  robot should be heading toward"), so no confident over-turn-vs-under-turn directional claim is
+  made in this entry - only the deviation magnitude, which is unambiguous.
+
+### Five parameters tested, all live-verified via the same harness, none fixed it
+1. **`left/right_steering_pid_gain` kd, 0.1 -> 0.005** (user's own test, physical wheel-tracking
+   damping) - no meaningful change. Reverted to `3.0 0 0.1` (see this file's `urdf/qcar_model.xacro`
+   history for why that value is load-bearing - lower kp risks reintroducing a real, previously-
+   fixed under-steering bug).
+2. **`PathFollowCritic`/`PathAngleCritic.offset_from_furthest`, 6/4 and 36/24** (user's own test,
+   look-ahead target distance) - no meaningful change at either value.
+3. **`PathAlignCritic.cost_weight`, 10.0 -> 7.0** (user's own test, path-adherence strength,
+   untested direction - only raising it had been tried before, on 2026-07-19 (3)) - no meaningful
+   change.
+4. **`GoalAngleCritic.threshold_to_consider`, added explicit `0.5`** (this entry, hypothesis: this
+   critic competing with path-following critics too far from the goal): peak deviation `0.44m ->
+   0.41m` - within noise, not a real fix. Reverted.
+5. **`FollowPath.wz_std`, 0.4 -> 0.3 alone** (this entry, hypothesis: MPPI's own sampling breadth,
+   not any single critic's weighting, is the dominant factor - motivated directly by 1-4 all
+   failing): peak deviation `0.44m -> 0.39m` - a small, likely-within-noise reduction (~12%,
+   comparable to other single-trial differences seen elsewhere in this file), not a clear fix. No
+   freeze regression this time (this exact value caused a freeze when first tried on 2026-07-18,
+   but `iteration_count` is now `2`, not `1`, which is the fix that made this safe to retest).
+   Reverted since the improvement isn't clearly beyond noise on one trial.
+
+### Synthesis - this looks goal-shape-dependent, not a single-parameter bug
+A separate, earlier test this session on a milder goal (`(1.5, 1.5, 90deg)`, a moderate curve with
+real net translation, nowhere near `minimum_turning_radius`) showed much smaller absolute
+deviation than this goal's 0.4m peak. The common factor across the five failed attempts above,
+plus that contrast, points at the goal's own geometry - a large heading change (~180deg) over a
+short net translation (~2m), close to the vehicle's kinematic limits - as the dominant driver of
+deviation magnitude, not any single tunable critic weight or gain. This is consistent with, and
+reinforces, the open trade-off already documented in this file under `FollowPath.PathAlignCritic`
+and `vx_std`/`wz_std`: path-tracking looseness under the current sampling configuration is a real,
+harder-than-single-parameter-tuning-suggests limitation for this specific class of goal.
+
+### Not yet tried (next steps if pursued further)
+- Lowering `vx_std` and `wz_std` **together** (not `wz_std` alone, as tried here) - the
+  2026-07-18 entry found a real deviation improvement doing this, at a documented, real cost
+  (+41% travel time on that trial). Never re-verified against a freeze regression with the current
+  `iteration_count: 2`.
+- Accepting this as a known, goal-shape-dependent limitation rather than continuing to search for
+  a single fixing parameter, given five independent attempts across both the critic layer and the
+  physical PID layer all converged on the same "no meaningful change" result.
+
 ## 2026-07-20 - User-tuned fix for goal accuracy: `minimum_turning_radius` 0.7 -> 1.0 paired with `yaw_goal_tolerance` 0.3 -> 0.5
 
 User made these two changes directly (hands-on investigation, per their own request in the prior

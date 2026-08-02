@@ -1,0 +1,113 @@
+[0.064s] DEBUG:colcon:Command line arguments: ['/usr/bin/colcon', 'build', '--packages-select', 'qcar_updated']
+[0.064s] DEBUG:colcon:Parsed command line arguments: Namespace(log_base=None, log_level=None, verb_name='build', build_base='build', install_base='install', merge_install=False, symlink_install=False, test_result_base=None, continue_on_error=False, executor='parallel', parallel_workers=12, event_handlers=None, ignore_user_meta=False, metas=['./colcon.meta'], base_paths=['.'], packages_ignore=None, packages_ignore_regex=None, paths=None, packages_up_to=None, packages_up_to_regex=None, packages_above=None, packages_above_and_dependencies=None, packages_above_depth=None, packages_select_by_dep=None, packages_skip_by_dep=None, packages_skip_up_to=None, packages_select_build_failed=False, packages_skip_build_finished=False, packages_select_test_failures=False, packages_skip_test_passed=False, packages_select=['qcar_updated'], packages_skip=None, packages_select_regex=None, packages_skip_regex=None, packages_start=None, packages_end=None, allow_overriding=[], cmake_args=None, cmake_target=None, cmake_target_skip_unavailable=False, cmake_clean_cache=False, cmake_clean_first=False, cmake_force_configure=False, ament_cmake_args=None, catkin_cmake_args=None, catkin_skip_building_tests=False, mixin_files=None, mixin=None, verb_parser=<colcon_mixin.mixin.mixin_argument.MixinArgumentDecorator object at 0x7ac3e1c56380>, verb_extension=<colcon_core.verb.build.BuildVerb object at 0x7ac3e1d63340>, main=<bound method BuildVerb.main of <colcon_core.verb.build.BuildVerb object at 0x7ac3e1d63340>>, mixin_verb=('build',))
+[0.151s] Level 1:colcon.colcon_core.package_discovery:discover_packages(colcon_meta) check parameters
+[0.151s] Level 1:colcon.colcon_core.package_discovery:discover_packages(recursive) check parameters
+[0.151s] Level 1:colcon.colcon_core.package_discovery:discover_packages(ignore) check parameters
+[0.151s] Level 1:colcon.colcon_core.package_discovery:discover_packages(path) check parameters
+[0.151s] Level 1:colcon.colcon_core.package_discovery:discover_packages(colcon_meta) discover
+[0.151s] Level 1:colcon.colcon_core.package_discovery:discover_packages(recursive) discover
+[0.151s] INFO:colcon.colcon_core.package_discovery:Crawling recursively for packages in '/home/amit/humble_ws/src/qcar_updated'
+[0.151s] Level 1:colcon.colcon_core.package_identification:_identify(.) by extensions ['ignore', 'ignore_ament_install']
+[0.151s] Level 1:colcon.colcon_core.package_identification:_identify(.) by extension 'ignore'
+[0.151s] Level 1:colcon.colcon_core.package_identification:_identify(.) by extension 'ignore_ament_install'
+[0.151s] Level 1:colcon.colcon_core.package_identification:_identify(.) by extensions ['colcon_pkg']
+[0.151s] Level 1:colcon.colcon_core.package_identification:_identify(.) by extension 'colcon_pkg'
+[0.151s] Level 1:colcon.colcon_core.package_identification:_identify(.) by extensions ['colcon_meta']
+[0.151s] Level 1:colcon.colcon_core.package_identification:_identify(.) by extension 'colcon_meta'
+[0.151s] Level 1:colcon.colcon_core.package_identification:_identify(.) by extensions ['ros']
+[0.151s] Level 1:colcon.colcon_core.package_identification:_identify(.) by extension 'ros'
+[0.160s] DEBUG:colcon.colcon_core.package_identification:Package '.' with type 'ros.ament_cmake' and name 'qcar_updated'
+[0.160s] Level 1:colcon.colcon_core.package_discovery:discover_packages(recursive) using defaults
+[0.160s] Level 1:colcon.colcon_core.package_discovery:discover_packages(ignore) discover
+[0.160s] Level 1:colcon.colcon_core.package_discovery:discover_packages(ignore) using defaults
+[0.160s] Level 1:colcon.colcon_core.package_discovery:discover_packages(path) discover
+[0.160s] Level 1:colcon.colcon_core.package_discovery:discover_packages(path) using defaults
+[0.177s] Level 1:colcon.colcon_core.package_discovery:discover_packages(prefix_path) check parameters
+[0.177s] Level 1:colcon.colcon_core.package_discovery:discover_packages(prefix_path) discover
+[0.178s] DEBUG:colcon.colcon_installed_package_information.package_discovery:Found 1 installed packages in /home/amit/ackermann_ws/install
+[0.178s] DEBUG:colcon.colcon_installed_package_information.package_discovery:Found 7 installed packages in /home/amit/humble_ws/install
+[0.179s] DEBUG:colcon.colcon_installed_package_information.package_discovery:Found 377 installed packages in /opt/ros/humble
+[0.180s] Level 1:colcon.colcon_core.package_discovery:discover_packages(prefix_path) using defaults
+[0.203s] Level 5:colcon.colcon_core.verb:set package 'qcar_updated' build argument 'cmake_args' from command line to 'None'
+[0.203s] Level 5:colcon.colcon_core.verb:set package 'qcar_updated' build argument 'cmake_target' from command line to 'None'
+[0.203s] Level 5:colcon.colcon_core.verb:set package 'qcar_updated' build argument 'cmake_target_skip_unavailable' from command line to 'False'
+[0.203s] Level 5:colcon.colcon_core.verb:set package 'qcar_updated' build argument 'cmake_clean_cache' from command line to 'False'
+[0.203s] Level 5:colcon.colcon_core.verb:set package 'qcar_updated' build argument 'cmake_clean_first' from command line to 'False'
+[0.203s] Level 5:colcon.colcon_core.verb:set package 'qcar_updated' build argument 'cmake_force_configure' from command line to 'False'
+[0.203s] Level 5:colcon.colcon_core.verb:set package 'qcar_updated' build argument 'ament_cmake_args' from command line to 'None'
+[0.203s] Level 5:colcon.colcon_core.verb:set package 'qcar_updated' build argument 'catkin_cmake_args' from command line to 'None'
+[0.203s] Level 5:colcon.colcon_core.verb:set package 'qcar_updated' build argument 'catkin_skip_building_tests' from command line to 'False'
+[0.203s] DEBUG:colcon.colcon_core.verb:Building package 'qcar_updated' with the following arguments: {'ament_cmake_args': None, 'build_base': '/home/amit/humble_ws/src/qcar_updated/build/qcar_updated', 'catkin_cmake_args': None, 'catkin_skip_building_tests': False, 'cmake_args': None, 'cmake_clean_cache': False, 'cmake_clean_first': False, 'cmake_force_configure': False, 'cmake_target': None, 'cmake_target_skip_unavailable': False, 'install_base': '/home/amit/humble_ws/src/qcar_updated/install/qcar_updated', 'merge_install': False, 'path': '/home/amit/humble_ws/src/qcar_updated', 'symlink_install': False, 'test_result_base': None}
+[0.203s] INFO:colcon.colcon_core.executor:Executing jobs using 'parallel' executor
+[0.204s] DEBUG:colcon.colcon_parallel_executor.executor.parallel:run_until_complete
+[0.204s] INFO:colcon.colcon_ros.task.ament_cmake.build:Building ROS package in '/home/amit/humble_ws/src/qcar_updated' with build type 'ament_cmake'
+[0.204s] INFO:colcon.colcon_cmake.task.cmake.build:Building CMake package in '/home/amit/humble_ws/src/qcar_updated'
+[0.205s] INFO:colcon.colcon_core.plugin_system:Skipping extension 'colcon_core.shell.bat': Not used on non-Windows systems
+[0.205s] INFO:colcon.colcon_core.shell:Skip shell extension 'powershell' for command environment: Not usable outside of PowerShell
+[0.205s] DEBUG:colcon.colcon_core.shell:Skip shell extension 'dsv' for command environment
+[0.215s] DEBUG:colcon.colcon_core.event_handler.log_command:Invoking command in '/home/amit/humble_ws/src/qcar_updated/build/qcar_updated': CMAKE_PREFIX_PATH=${CMAKE_PREFIX_PATH}:/opt/ros/humble /usr/bin/cmake --build /home/amit/humble_ws/src/qcar_updated/build/qcar_updated -- -j12 -l12
+[0.273s] DEBUG:colcon.colcon_core.event_handler.log_command:Invoked command in '/home/amit/humble_ws/src/qcar_updated/build/qcar_updated' returned '0': CMAKE_PREFIX_PATH=${CMAKE_PREFIX_PATH}:/opt/ros/humble /usr/bin/cmake --build /home/amit/humble_ws/src/qcar_updated/build/qcar_updated -- -j12 -l12
+[0.280s] DEBUG:colcon.colcon_core.event_handler.log_command:Invoking command in '/home/amit/humble_ws/src/qcar_updated/build/qcar_updated': CMAKE_PREFIX_PATH=${CMAKE_PREFIX_PATH}:/opt/ros/humble /usr/bin/cmake --install /home/amit/humble_ws/src/qcar_updated/build/qcar_updated
+[0.291s] Level 1:colcon.colcon_core.environment:create_environment_scripts_only(qcar_updated)
+[0.292s] DEBUG:colcon.colcon_core.event_handler.log_command:Invoked command in '/home/amit/humble_ws/src/qcar_updated/build/qcar_updated' returned '0': CMAKE_PREFIX_PATH=${CMAKE_PREFIX_PATH}:/opt/ros/humble /usr/bin/cmake --install /home/amit/humble_ws/src/qcar_updated/build/qcar_updated
+[0.293s] Level 1:colcon.colcon_core.environment:checking '/home/amit/humble_ws/src/qcar_updated/install/qcar_updated' for CMake module files
+[0.293s] Level 1:colcon.colcon_core.environment:checking '/home/amit/humble_ws/src/qcar_updated/install/qcar_updated' for CMake config files
+[0.294s] Level 1:colcon.colcon_core.shell:create_environment_hook('qcar_updated', 'cmake_prefix_path')
+[0.294s] INFO:colcon.colcon_core.shell:Creating environment hook '/home/amit/humble_ws/src/qcar_updated/install/qcar_updated/share/qcar_updated/hook/cmake_prefix_path.ps1'
+[0.294s] INFO:colcon.colcon_core.shell:Creating environment descriptor '/home/amit/humble_ws/src/qcar_updated/install/qcar_updated/share/qcar_updated/hook/cmake_prefix_path.dsv'
+[0.294s] INFO:colcon.colcon_core.shell:Creating environment hook '/home/amit/humble_ws/src/qcar_updated/install/qcar_updated/share/qcar_updated/hook/cmake_prefix_path.sh'
+[0.295s] Level 1:colcon.colcon_core.environment:checking '/home/amit/humble_ws/src/qcar_updated/install/qcar_updated/lib'
+[0.295s] Level 1:colcon.colcon_core.shell:create_environment_hook('qcar_updated', 'ld_library_path_lib')
+[0.295s] INFO:colcon.colcon_core.shell:Creating environment hook '/home/amit/humble_ws/src/qcar_updated/install/qcar_updated/share/qcar_updated/hook/ld_library_path_lib.ps1'
+[0.295s] INFO:colcon.colcon_core.shell:Creating environment descriptor '/home/amit/humble_ws/src/qcar_updated/install/qcar_updated/share/qcar_updated/hook/ld_library_path_lib.dsv'
+[0.295s] INFO:colcon.colcon_core.shell:Creating environment hook '/home/amit/humble_ws/src/qcar_updated/install/qcar_updated/share/qcar_updated/hook/ld_library_path_lib.sh'
+[0.296s] Level 1:colcon.colcon_core.environment:checking '/home/amit/humble_ws/src/qcar_updated/install/qcar_updated/bin'
+[0.296s] Level 1:colcon.colcon_core.environment:checking '/home/amit/humble_ws/src/qcar_updated/install/qcar_updated/lib/pkgconfig/qcar_updated.pc'
+[0.296s] Level 1:colcon.colcon_core.environment:checking '/home/amit/humble_ws/src/qcar_updated/install/qcar_updated/lib/python3.10/site-packages'
+[0.296s] Level 1:colcon.colcon_core.environment:checking '/home/amit/humble_ws/src/qcar_updated/install/qcar_updated/bin'
+[0.296s] INFO:colcon.colcon_core.shell:Creating package script '/home/amit/humble_ws/src/qcar_updated/install/qcar_updated/share/qcar_updated/package.ps1'
+[0.297s] INFO:colcon.colcon_core.shell:Creating package descriptor '/home/amit/humble_ws/src/qcar_updated/install/qcar_updated/share/qcar_updated/package.dsv'
+[0.297s] INFO:colcon.colcon_core.shell:Creating package script '/home/amit/humble_ws/src/qcar_updated/install/qcar_updated/share/qcar_updated/package.sh'
+[0.298s] INFO:colcon.colcon_core.shell:Creating package script '/home/amit/humble_ws/src/qcar_updated/install/qcar_updated/share/qcar_updated/package.bash'
+[0.298s] INFO:colcon.colcon_core.shell:Creating package script '/home/amit/humble_ws/src/qcar_updated/install/qcar_updated/share/qcar_updated/package.zsh'
+[0.298s] Level 1:colcon.colcon_core.environment:create_file_with_runtime_dependencies(/home/amit/humble_ws/src/qcar_updated/install/qcar_updated/share/colcon-core/packages/qcar_updated)
+[0.299s] Level 1:colcon.colcon_core.environment:create_environment_scripts_only(qcar_updated)
+[0.299s] Level 1:colcon.colcon_core.environment:checking '/home/amit/humble_ws/src/qcar_updated/install/qcar_updated' for CMake module files
+[0.299s] Level 1:colcon.colcon_core.environment:checking '/home/amit/humble_ws/src/qcar_updated/install/qcar_updated' for CMake config files
+[0.299s] Level 1:colcon.colcon_core.shell:create_environment_hook('qcar_updated', 'cmake_prefix_path')
+[0.299s] INFO:colcon.colcon_core.shell:Creating environment hook '/home/amit/humble_ws/src/qcar_updated/install/qcar_updated/share/qcar_updated/hook/cmake_prefix_path.ps1'
+[0.299s] INFO:colcon.colcon_core.shell:Creating environment descriptor '/home/amit/humble_ws/src/qcar_updated/install/qcar_updated/share/qcar_updated/hook/cmake_prefix_path.dsv'
+[0.300s] INFO:colcon.colcon_core.shell:Creating environment hook '/home/amit/humble_ws/src/qcar_updated/install/qcar_updated/share/qcar_updated/hook/cmake_prefix_path.sh'
+[0.300s] Level 1:colcon.colcon_core.environment:checking '/home/amit/humble_ws/src/qcar_updated/install/qcar_updated/lib'
+[0.300s] Level 1:colcon.colcon_core.shell:create_environment_hook('qcar_updated', 'ld_library_path_lib')
+[0.300s] INFO:colcon.colcon_core.shell:Creating environment hook '/home/amit/humble_ws/src/qcar_updated/install/qcar_updated/share/qcar_updated/hook/ld_library_path_lib.ps1'
+[0.300s] INFO:colcon.colcon_core.shell:Creating environment descriptor '/home/amit/humble_ws/src/qcar_updated/install/qcar_updated/share/qcar_updated/hook/ld_library_path_lib.dsv'
+[0.301s] INFO:colcon.colcon_core.shell:Creating environment hook '/home/amit/humble_ws/src/qcar_updated/install/qcar_updated/share/qcar_updated/hook/ld_library_path_lib.sh'
+[0.301s] Level 1:colcon.colcon_core.environment:checking '/home/amit/humble_ws/src/qcar_updated/install/qcar_updated/bin'
+[0.301s] Level 1:colcon.colcon_core.environment:checking '/home/amit/humble_ws/src/qcar_updated/install/qcar_updated/lib/pkgconfig/qcar_updated.pc'
+[0.301s] Level 1:colcon.colcon_core.environment:checking '/home/amit/humble_ws/src/qcar_updated/install/qcar_updated/lib/python3.10/site-packages'
+[0.301s] Level 1:colcon.colcon_core.environment:checking '/home/amit/humble_ws/src/qcar_updated/install/qcar_updated/bin'
+[0.301s] INFO:colcon.colcon_core.shell:Creating package script '/home/amit/humble_ws/src/qcar_updated/install/qcar_updated/share/qcar_updated/package.ps1'
+[0.302s] INFO:colcon.colcon_core.shell:Creating package descriptor '/home/amit/humble_ws/src/qcar_updated/install/qcar_updated/share/qcar_updated/package.dsv'
+[0.302s] INFO:colcon.colcon_core.shell:Creating package script '/home/amit/humble_ws/src/qcar_updated/install/qcar_updated/share/qcar_updated/package.sh'
+[0.302s] INFO:colcon.colcon_core.shell:Creating package script '/home/amit/humble_ws/src/qcar_updated/install/qcar_updated/share/qcar_updated/package.bash'
+[0.302s] INFO:colcon.colcon_core.shell:Creating package script '/home/amit/humble_ws/src/qcar_updated/install/qcar_updated/share/qcar_updated/package.zsh'
+[0.302s] Level 1:colcon.colcon_core.environment:create_file_with_runtime_dependencies(/home/amit/humble_ws/src/qcar_updated/install/qcar_updated/share/colcon-core/packages/qcar_updated)
+[0.303s] DEBUG:colcon.colcon_parallel_executor.executor.parallel:closing loop
+[0.303s] DEBUG:colcon.colcon_parallel_executor.executor.parallel:loop closed
+[0.303s] DEBUG:colcon.colcon_parallel_executor.executor.parallel:run_until_complete finished with '0'
+[0.303s] DEBUG:colcon.colcon_core.event_reactor:joining thread
+[0.306s] INFO:colcon.colcon_core.plugin_system:Skipping extension 'colcon_notification.desktop_notification.terminal_notifier': Not used on non-Darwin systems
+[0.306s] INFO:colcon.colcon_core.plugin_system:Skipping extension 'colcon_notification.desktop_notification.win32': Not used on non-Windows systems
+[0.306s] INFO:colcon.colcon_notification.desktop_notification:Sending desktop notification using 'notify2'
+[0.313s] DEBUG:colcon.colcon_core.event_reactor:joined thread
+[0.313s] INFO:colcon.colcon_core.shell:Creating prefix script '/home/amit/humble_ws/src/qcar_updated/install/local_setup.ps1'
+[0.315s] INFO:colcon.colcon_core.shell:Creating prefix util module '/home/amit/humble_ws/src/qcar_updated/install/_local_setup_util_ps1.py'
+[0.317s] INFO:colcon.colcon_core.shell:Creating prefix chain script '/home/amit/humble_ws/src/qcar_updated/install/setup.ps1'
+[0.318s] INFO:colcon.colcon_core.shell:Creating prefix script '/home/amit/humble_ws/src/qcar_updated/install/local_setup.sh'
+[0.319s] INFO:colcon.colcon_core.shell:Creating prefix util module '/home/amit/humble_ws/src/qcar_updated/install/_local_setup_util_sh.py'
+[0.320s] INFO:colcon.colcon_core.shell:Creating prefix chain script '/home/amit/humble_ws/src/qcar_updated/install/setup.sh'
+[0.320s] INFO:colcon.colcon_core.shell:Creating prefix script '/home/amit/humble_ws/src/qcar_updated/install/local_setup.bash'
+[0.320s] INFO:colcon.colcon_core.shell:Creating prefix chain script '/home/amit/humble_ws/src/qcar_updated/install/setup.bash'
+[0.321s] INFO:colcon.colcon_core.shell:Creating prefix script '/home/amit/humble_ws/src/qcar_updated/install/local_setup.zsh'
+[0.321s] INFO:colcon.colcon_core.shell:Creating prefix chain script '/home/amit/humble_ws/src/qcar_updated/install/setup.zsh'
