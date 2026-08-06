@@ -46,10 +46,12 @@ source install/setup.bash
 | `launch/qcar_nav2.launch.py` | Navigation: Nav2 stack against a saved map (includes the sim by default) |
 | `config/cartographer/qcar_2d.lua` | Cartographer SLAM parameters |
 | `config/nav2/nav2_params.yaml` | Nav2 stack parameters (AMCL, costmaps, planner, controller) - see `config/nav2/PARAMS_REFERENCE.md` for a full per-parameter explanation, or `TUNING.md` for the accuracy-tuning subset |
+| `config/nav2/behavior_trees/*.xml` | Custom copies of nav2's stock BT trees, wired in via `RewrittenYaml` in `qcar_nav2.launch.py` - replan only on an invalid/updated path (not unconditionally every second) and no `<Spin>` recovery, since this Ackermann car can't rotate in place |
+| `src/critics/early_commit_critic.cpp`, `include/qcar_updated/critics/early_commit_critic.hpp` | Custom MPPI critic plugin (`EarlyCommitCritic`) built into this package - see "Custom MPPI critic" below |
 | `maps/qcar_map.yaml` / `.pgm` | Saved occupancy grid map used by `qcar_nav2.launch.py` |
 | `scripts/qcar_teleop_twist.py` | Keyboard teleop publishing `/cmd_vel` |
 | `worlds/*.world` | Gazebo worlds (`myworld.world` is used by default; others available for manual swap) |
-| `TUNING.md` | Navigation accuracy tuning reference (physics, RPP controller, AMCL, costmap parameters) |
+| `TUNING.md` | Navigation accuracy tuning reference (physics, MPPI controller, AMCL, costmap parameters) |
 
 ## Quick start: simulation only
 
@@ -130,10 +132,29 @@ plugin's `publish_odom_tf` is hardcoded `true`. See Troubleshooting below.
    a few seconds (drive a little to help it disambiguate) before trusting the localization.
 
 4. Send a goal with **2D Nav Goal** in RViz, or via the `navigate_to_pose` action, and the robot
-   will plan and drive there using `nav2_regulated_pure_pursuit_controller`.
+   will plan (via `nav2_smac_planner::SmacPlannerHybrid`, Reeds-Shepp motion model) and drive there
+   using `nav2_mppi_controller::MPPIController` (`FollowPath`, see Custom MPPI critic below).
 
 You can also drive manually at any time with `ros2 run qcar_updated qcar_teleop_twist.py`
 (publishes to `/cmd_vel`, same as Nav2's controller output).
+
+### Custom MPPI critic: `EarlyCommitCritic`
+
+`FollowPath.critics` includes a custom critic plugin built into this package
+(`src/critics/early_commit_critic.cpp`, exported via `qcar_critics.xml`/`package.xml`), on top of
+the stock MPPI critics (`ConstraintCritic`, `CostCritic`, `GoalCritic`, `GoalAngleCritic`,
+`PathAlignCritic`, `PathFollowCritic`, `PathAngleCritic`). It scores only the first
+`early_time_steps` of each sampled trajectory against the bearing to a near-term path point, with
+no distance/angle gating - unlike the stock path critics, it always pushes MPPI to start turning
+toward the path immediately rather than driving straight into a curve before reacting to it. Gated
+by `active_path_points` so it stays out of the way once the robot has made real progress along the
+route. See `CHANGELOG.md` 2026-07-18 (9) for why it was needed and 2026-07-19 (1) for a later
+direction-awareness fix (reversing/K-turn segments).
+
+Building this plugin requires `xtensor`/`xsimd` compile definitions to match
+`nav2_mppi_controller`'s own build exactly (see the comment block at the top of `CMakeLists.txt`) -
+a mismatch here is a silent ABI mismatch that crashes `nav2_container` on the first control cycle
+that touches vectorized critic math, not a compile error.
 
 ## Launch arguments
 
@@ -240,3 +261,18 @@ camera_*}`. During SLAM, Cartographer *should* own both `map -> odom` and `odom 
 
 See `CHANGELOG.md` for a history of fixes applied to this package, and `TUNING.md` for a
 navigation-accuracy parameter reference.
+
+## Relation to `qcar_hardware`
+
+This package is simulation-only (Gazebo classic). The sibling `qcar_hardware` package
+(`../qcar_hardware/`) covers bring-up on the physical QCar 2 - Quanser HAL/PAL reference material,
+hardware-test scripts, and `hardware_integration_reference.md` documenting the actual sensor/motor
+API. The physical QCar's onboard compute runs ROS 2 Dashing on Ubuntu 18.04, not Humble, so this
+package's Nav2/MPPI stack (including the custom critic above) cannot run natively on it and keeps
+running here, on the dev PC. `qcar_hardware` instead adds a small native bridge on the QCar itself
+(`qcar_hw_bridge.py` / `qcar_lidar_bridge.py`) that subscribes to `/cmd_vel` from this stack over
+the network and publishes real `/odom`/`/imu`/`/scan` back - a Humble Docker container on the QCar
+was the original plan but was dropped for storage reasons (32GB eMMC, already shared with the
+onboard Dashing/Melodic installs). Not yet verified end-to-end on hardware; see `qcar_hardware`'s
+reference doc for the architecture, the open Dashing↔Humble wire-compatibility risk, and what still
+needs calibrating (throttle-to-speed gain in particular).

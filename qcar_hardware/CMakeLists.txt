@@ -22,6 +22,7 @@ install(DIRECTORY urdf launch worlds models rviz scripts
 
 install(PROGRAMS
   scripts/qcar_teleop_twist.py
+  scripts/qcar_relay_node.py
   DESTINATION lib/${PROJECT_NAME}
 )
 

@@ -1,13 +1,34 @@
 #!/usr/bin/env python3
+'''qcar_teleop_twist.py
 
+Keyboard teleop publishing /cmd_vel (geometry_msgs/Twist). Run this on the
+dev PC - the same /cmd_vel is consumed by whichever drive is currently up:
+Gazebo's gazebo_ros_ackermann_drive plugin in simulation, or
+qcar_hardware/qcar_onboard/qcar_bridge.py listening on the QCar's onboard
+ROS2 Dashing for real hardware. No topic/type change needed either way; for
+real hardware, ROS_DOMAIN_ID must match on both machines and both must be
+reachable over the same network (see hardware_integration_reference.md for
+the untested Dashing<->Humble wire-compatibility risk this depends on).
+'''
 import math
+import os
+import sys
+import tty
+import termios
+
+# Pin the RMW implementation explicitly rather than trusting whatever each
+# machine's shell environment happens to default to - Dashing and Humble both
+# default to rmw_fastrtps_cpp, but if either machine's environment overrides
+# this differently (e.g. a cyclonedds install), the two ends would silently
+# never discover each other. Must be set before rclpy is imported. This does
+# NOT by itself guarantee Dashing<->Humble discovery/serialization actually
+# works across that many releases - still verify with a plain talker/listener
+# test first, per hardware_integration_reference.md.
+os.environ.setdefault('RMW_IMPLEMENTATION', 'rmw_fastrtps_cpp')
 
 import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import Twist
-import sys
-import tty
-import termios
 
 # Must match urdf/qcar_model.xacro hub joint origins (0.12960 + 0.12765 m).
 WHEELBASE = 0.25725
@@ -45,6 +66,8 @@ class QCarTwistTeleop(Node):
 
         print(MSG)
         print(f'Current speed: {self.speed:.2f} m/s')
+        print(f"Publishing /cmd_vel on ROS_DOMAIN_ID={os.environ.get('ROS_DOMAIN_ID', '0 (default)')} "
+              f"- confirm this matches the QCar's onboard qcar_hw_bridge.py if driving real hardware.")
 
     def get_key(self):
         fd = sys.stdin.fileno()
@@ -58,7 +81,10 @@ class QCarTwistTeleop(Node):
 
     def publish_drive(self, speed, steer_angle):
         # cmd_vel.angular.z is a yaw rate, not a steering angle: invert the
-        # bicycle model so downstream cmd_vel_to_drive.py recovers steer_angle.
+        # bicycle model so the downstream consumer recovers steer_angle - either
+        # Gazebo's gazebo_ros_ackermann_drive plugin (sim) or
+        # qcar_hardware/qcar_onboard/qcar_bridge.py's cmd_vel_callback() on
+        # real hardware, which applies the exact inverse of this formula.
         yaw_rate = 0.0
         if abs(speed) > 1e-3:
             yaw_rate = speed * math.tan(steer_angle) / WHEELBASE
