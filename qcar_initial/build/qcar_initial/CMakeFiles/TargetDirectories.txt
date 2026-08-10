@@ -1,0 +1,10 @@
+/home/amit/humble_ws/src/qcar_initial/build/qcar_initial/CMakeFiles/uninstall.dir
+/home/amit/humble_ws/src/qcar_initial/build/qcar_initial/CMakeFiles/qcar_initial_uninstall.dir
+/home/amit/humble_ws/src/qcar_initial/build/qcar_initial/CMakeFiles/qcar_critics.dir
+/home/amit/humble_ws/src/qcar_initial/build/qcar_initial/CMakeFiles/test.dir
+/home/amit/humble_ws/src/qcar_initial/build/qcar_initial/CMakeFiles/edit_cache.dir
+/home/amit/humble_ws/src/qcar_initial/build/qcar_initial/CMakeFiles/rebuild_cache.dir
+/home/amit/humble_ws/src/qcar_initial/build/qcar_initial/CMakeFiles/list_install_components.dir
+/home/amit/humble_ws/src/qcar_initial/build/qcar_initial/CMakeFiles/install.dir
+/home/amit/humble_ws/src/qcar_initial/build/qcar_initial/CMakeFiles/install/local.dir
+/home/amit/humble_ws/src/qcar_initial/build/qcar_initial/CMakeFiles/install/strip.dir

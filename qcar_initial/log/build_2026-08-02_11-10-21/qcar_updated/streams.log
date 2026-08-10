@@ -1,0 +1,128 @@
+[0.007s] Invoking command in '/home/amit/humble_ws/src/qcar_initial/build/qcar_initial': CMAKE_PREFIX_PATH=${CMAKE_PREFIX_PATH}:/opt/ros/humble /usr/bin/cmake /home/amit/humble_ws/src/qcar_initial -DCMAKE_INSTALL_PREFIX=/home/amit/humble_ws/src/qcar_initial/install/qcar_initial
+[0.103s] -- The C compiler identification is GNU 11.4.0
+[0.174s] -- The CXX compiler identification is GNU 11.4.0
+[0.180s] -- Detecting C compiler ABI info
+[0.239s] -- Detecting C compiler ABI info - done
+[0.246s] -- Check for working C compiler: /usr/bin/cc - skipped
+[0.246s] -- Detecting C compile features
+[0.246s] -- Detecting C compile features - done
+[0.248s] -- Detecting CXX compiler ABI info
+[0.308s] -- Detecting CXX compiler ABI info - done
+[0.313s] -- Check for working CXX compiler: /usr/bin/c++ - skipped
+[0.313s] -- Detecting CXX compile features
+[0.313s] -- Detecting CXX compile features - done
+[0.315s] -- Found ament_cmake: 1.3.14 (/opt/ros/humble/share/ament_cmake/cmake)
+[0.424s] -- Found Python3: /usr/bin/python3 (found version "3.10.12") found components: Interpreter 
+[0.493s] -- Found xacro: 2.1.1 (/opt/ros/humble/share/xacro/cmake)
+[0.495s] -- Found robot_state_publisher: 3.0.3 (/opt/ros/humble/share/robot_state_publisher/cmake)
+[0.526s] -- Found rosidl_generator_c: 3.1.8 (/opt/ros/humble/share/rosidl_generator_c/cmake)
+[0.529s] -- Found rosidl_adapter: 3.1.8 (/opt/ros/humble/share/rosidl_adapter/cmake)
+[0.536s] -- Found rosidl_generator_cpp: 3.1.8 (/opt/ros/humble/share/rosidl_generator_cpp/cmake)
+[0.545s] -- Using all available rosidl_typesupport_c: rosidl_typesupport_fastrtps_c;rosidl_typesupport_introspection_c
+[0.557s] -- Using all available rosidl_typesupport_cpp: rosidl_typesupport_fastrtps_cpp;rosidl_typesupport_introspection_cpp
+[0.594s] -- Found eigen3_cmake_module: 0.1.1 (/opt/ros/humble/share/eigen3_cmake_module/cmake)
+[0.595s] -- Found Eigen3: TRUE (found version "3.4.0") 
+[0.595s] -- Ensuring Eigen3 include directory is part of orocos-kdl CMake target
+[0.629s] -- Found rmw_implementation_cmake: 6.1.2 (/opt/ros/humble/share/rmw_implementation_cmake/cmake)
+[0.631s] -- Found rmw_fastrtps_cpp: 6.2.10 (/opt/ros/humble/share/rmw_fastrtps_cpp/cmake)
+[0.701s] -- Found OpenSSL: /usr/lib/x86_64-linux-gnu/libcrypto.so (found version "3.0.2")  
+[0.719s] -- Found FastRTPS: /opt/ros/humble/include  
+[0.751s] -- Using RMW implementation 'rmw_fastrtps_cpp' as default
+[0.759s] -- Looking for pthread.h
+[0.817s] -- Looking for pthread.h - found
+[0.818s] -- Performing Test CMAKE_HAVE_LIBC_PTHREAD
+[0.882s] -- Performing Test CMAKE_HAVE_LIBC_PTHREAD - Success
+[0.883s] -- Found Threads: TRUE  
+[1.017s] -- Found nav2_mppi_controller: 1.1.20 (/opt/ros/humble/share/nav2_mppi_controller/cmake)
+[1.174s] -- Performing Test arch_native_supported
+[1.233s] -- Performing Test arch_native_supported - Success
+[1.256s] -- Found ament_lint_auto: 0.12.15 (/opt/ros/humble/share/ament_lint_auto/cmake)
+[1.311s] -- Added test 'cppcheck' to perform static code analysis on C / C++ code
+[1.311s] -- Configured cppcheck include dirs: $<BUILD_INTERFACE:/home/amit/humble_ws/src/qcar_initial/include>
+[1.312s] -- Configured cppcheck exclude dirs and/or files: 
+[1.312s] -- Added test 'flake8' to check Python code syntax and style conventions
+[1.314s] -- Added test 'lint_cmake' to check CMake code style
+[1.314s] -- Added test 'pep257' to check Python code against some of the docstring style conventions in PEP 257
+[1.317s] -- Added test 'uncrustify' to check C / C++ code style
+[1.317s] -- Configured uncrustify additional arguments: 
+[1.318s] -- Added test 'xmllint' to check XML markup files
+[1.320s] -- Configuring done
+[1.361s] -- Generating done
+[1.366s] -- Build files have been written to: /home/amit/humble_ws/src/qcar_initial/build/qcar_initial
+[1.376s] Invoked command in '/home/amit/humble_ws/src/qcar_initial/build/qcar_initial' returned '0': CMAKE_PREFIX_PATH=${CMAKE_PREFIX_PATH}:/opt/ros/humble /usr/bin/cmake /home/amit/humble_ws/src/qcar_initial -DCMAKE_INSTALL_PREFIX=/home/amit/humble_ws/src/qcar_initial/install/qcar_initial
+[1.377s] Invoking command in '/home/amit/humble_ws/src/qcar_initial/build/qcar_initial': CMAKE_PREFIX_PATH=${CMAKE_PREFIX_PATH}:/opt/ros/humble /usr/bin/cmake --build /home/amit/humble_ws/src/qcar_initial/build/qcar_initial -- -j12 -l12
+[1.420s] [ 50%] [32mBuilding CXX object CMakeFiles/qcar_critics.dir/src/critics/early_commit_critic.cpp.o[0m
+[7.350s] [100%] [32m[1mLinking CXX shared library libqcar_critics.so[0m
+[7.719s] [100%] Built target qcar_critics
+[7.729s] Invoked command in '/home/amit/humble_ws/src/qcar_initial/build/qcar_initial' returned '0': CMAKE_PREFIX_PATH=${CMAKE_PREFIX_PATH}:/opt/ros/humble /usr/bin/cmake --build /home/amit/humble_ws/src/qcar_initial/build/qcar_initial -- -j12 -l12
+[7.736s] Invoking command in '/home/amit/humble_ws/src/qcar_initial/build/qcar_initial': CMAKE_PREFIX_PATH=${CMAKE_PREFIX_PATH}:/opt/ros/humble /usr/bin/cmake --install /home/amit/humble_ws/src/qcar_initial/build/qcar_initial
+[7.743s] -- Install configuration: ""
+[7.743s] -- Installing: /home/amit/humble_ws/src/qcar_initial/install/qcar_initial/share/qcar_initial/qcar_critics.xml
+[7.743s] -- Installing: /home/amit/humble_ws/src/qcar_initial/install/qcar_initial/lib/libqcar_critics.so
+[7.746s] -- Set runtime path of "/home/amit/humble_ws/src/qcar_initial/install/qcar_initial/lib/libqcar_critics.so" to ""
+[7.746s] -- Installing: /home/amit/humble_ws/src/qcar_initial/install/qcar_initial/include
+[7.746s] -- Installing: /home/amit/humble_ws/src/qcar_initial/install/qcar_initial/include/qcar_initial
+[7.747s] -- Installing: /home/amit/humble_ws/src/qcar_initial/install/qcar_initial/include/qcar_initial/critics
+[7.747s] -- Installing: /home/amit/humble_ws/src/qcar_initial/install/qcar_initial/include/qcar_initial/critics/early_commit_critic.hpp
+[7.747s] -- Installing: /home/amit/humble_ws/src/qcar_initial/install/qcar_initial/share/qcar_initial/urdf
+[7.747s] -- Installing: /home/amit/humble_ws/src/qcar_initial/install/qcar_initial/share/qcar_initial/urdf/materials.xacro
+[7.747s] -- Installing: /home/amit/humble_ws/src/qcar_initial/install/qcar_initial/share/qcar_initial/urdf/qcar_model.xacro
+[7.747s] -- Installing: /home/amit/humble_ws/src/qcar_initial/install/qcar_initial/share/qcar_initial/launch
+[7.747s] -- Installing: /home/amit/humble_ws/src/qcar_initial/install/qcar_initial/share/qcar_initial/launch/qcar_slam.launch.py
+[7.747s] -- Installing: /home/amit/humble_ws/src/qcar_initial/install/qcar_initial/share/qcar_initial/launch/qcar_initial.launch.py
+[7.747s] -- Installing: /home/amit/humble_ws/src/qcar_initial/install/qcar_initial/share/qcar_initial/launch/qcar_nav2.launch.py
+[7.747s] -- Installing: /home/amit/humble_ws/src/qcar_initial/install/qcar_initial/share/qcar_initial/launch/__pycache__
+[7.747s] -- Installing: /home/amit/humble_ws/src/qcar_initial/install/qcar_initial/share/qcar_initial/launch/__pycache__/qcar_nav2.launch.cpython-310.pyc
+[7.747s] -- Installing: /home/amit/humble_ws/src/qcar_initial/install/qcar_initial/share/qcar_initial/launch/__pycache__/qcar_initial.launch.cpython-310.pyc
+[7.747s] -- Installing: /home/amit/humble_ws/src/qcar_initial/install/qcar_initial/share/qcar_initial/launch/__pycache__/qcar_slam.launch.cpython-310.pyc
+[7.747s] -- Installing: /home/amit/humble_ws/src/qcar_initial/install/qcar_initial/share/qcar_initial/worlds
+[7.747s] -- Installing: /home/amit/humble_ws/src/qcar_initial/install/qcar_initial/share/qcar_initial/worlds/square.world
+[7.748s] -- Installing: /home/amit/humble_ws/src/qcar_initial/install/qcar_initial/share/qcar_initial/worlds/myworld.world
+[7.748s] -- Installing: /home/amit/humble_ws/src/qcar_initial/install/qcar_initial/share/qcar_initial/worlds/empty.world
+[7.748s] -- Installing: /home/amit/humble_ws/src/qcar_initial/install/qcar_initial/share/qcar_initial/worlds/rectangle.world
+[7.748s] -- Installing: /home/amit/humble_ws/src/qcar_initial/install/qcar_initial/share/qcar_initial/models
+[7.748s] -- Installing: /home/amit/humble_ws/src/qcar_initial/install/qcar_initial/share/qcar_initial/models/qcar
+[7.748s] -- Installing: /home/amit/humble_ws/src/qcar_initial/install/qcar_initial/share/qcar_initial/models/qcar/QCarLidar.stl
+[7.748s] -- Installing: /home/amit/humble_ws/src/qcar_initial/install/qcar_initial/share/qcar_initial/models/qcar/QCarBody.stl
+[7.749s] -- Installing: /home/amit/humble_ws/src/qcar_initial/install/qcar_initial/share/qcar_initial/models/qcar/QCarSteeringHubL.stl
+[7.749s] -- Installing: /home/amit/humble_ws/src/qcar_initial/install/qcar_initial/share/qcar_initial/models/qcar/QCarWheel.stl
+[7.749s] -- Installing: /home/amit/humble_ws/src/qcar_initial/install/qcar_initial/share/qcar_initial/models/qcar/QCarSteeringHubR.stl
+[7.749s] -- Installing: /home/amit/humble_ws/src/qcar_initial/install/qcar_initial/share/qcar_initial/config
+[7.749s] -- Installing: /home/amit/humble_ws/src/qcar_initial/install/qcar_initial/share/qcar_initial/config/cartographer
+[7.749s] -- Installing: /home/amit/humble_ws/src/qcar_initial/install/qcar_initial/share/qcar_initial/config/cartographer/qcar_2d.lua
+[7.750s] -- Installing: /home/amit/humble_ws/src/qcar_initial/install/qcar_initial/share/qcar_initial/config/nav2
+[7.750s] -- Installing: /home/amit/humble_ws/src/qcar_initial/install/qcar_initial/share/qcar_initial/config/nav2/PARAMS_REFERENCE.md
+[7.750s] -- Installing: /home/amit/humble_ws/src/qcar_initial/install/qcar_initial/share/qcar_initial/config/nav2/behavior_trees
+[7.750s] -- Installing: /home/amit/humble_ws/src/qcar_initial/install/qcar_initial/share/qcar_initial/config/nav2/behavior_trees/navigate_through_poses_w_replanning_and_recovery.xml
+[7.750s] -- Installing: /home/amit/humble_ws/src/qcar_initial/install/qcar_initial/share/qcar_initial/config/nav2/behavior_trees/navigate_to_pose_w_replanning_and_recovery.xml
+[7.750s] -- Installing: /home/amit/humble_ws/src/qcar_initial/install/qcar_initial/share/qcar_initial/config/nav2/nav2_params.yaml
+[7.750s] -- Installing: /home/amit/humble_ws/src/qcar_initial/install/qcar_initial/share/qcar_initial/rviz
+[7.750s] -- Installing: /home/amit/humble_ws/src/qcar_initial/install/qcar_initial/share/qcar_initial/rviz/qcar.rviz
+[7.750s] -- Installing: /home/amit/humble_ws/src/qcar_initial/install/qcar_initial/share/qcar_initial/scripts
+[7.750s] -- Installing: /home/amit/humble_ws/src/qcar_initial/install/qcar_initial/share/qcar_initial/scripts/qcar_teleop_twist.py
+[7.750s] -- Installing: /home/amit/humble_ws/src/qcar_initial/install/qcar_initial/share/qcar_initial/maps
+[7.750s] -- Installing: /home/amit/humble_ws/src/qcar_initial/install/qcar_initial/share/qcar_initial/maps/qcar_map.pgm
+[7.750s] -- Installing: /home/amit/humble_ws/src/qcar_initial/install/qcar_initial/share/qcar_initial/maps/qcar_map.yaml
+[7.750s] -- Installing: /home/amit/humble_ws/src/qcar_initial/install/qcar_initial/lib/qcar_initial/qcar_teleop_twist.py
+[7.750s] -- Installing: /home/amit/humble_ws/src/qcar_initial/install/qcar_initial/share/qcar_initial/environment/library_path.sh
+[7.750s] -- Installing: /home/amit/humble_ws/src/qcar_initial/install/qcar_initial/share/qcar_initial/environment/library_path.dsv
+[7.750s] -- Installing: /home/amit/humble_ws/src/qcar_initial/install/qcar_initial/share/ament_index/resource_index/package_run_dependencies/qcar_initial
+[7.751s] -- Installing: /home/amit/humble_ws/src/qcar_initial/install/qcar_initial/share/ament_index/resource_index/parent_prefix_path/qcar_initial
+[7.751s] -- Installing: /home/amit/humble_ws/src/qcar_initial/install/qcar_initial/share/qcar_initial/environment/ament_prefix_path.sh
+[7.751s] -- Installing: /home/amit/humble_ws/src/qcar_initial/install/qcar_initial/share/qcar_initial/environment/ament_prefix_path.dsv
+[7.751s] -- Installing: /home/amit/humble_ws/src/qcar_initial/install/qcar_initial/share/qcar_initial/environment/path.sh
+[7.751s] -- Installing: /home/amit/humble_ws/src/qcar_initial/install/qcar_initial/share/qcar_initial/environment/path.dsv
+[7.751s] -- Installing: /home/amit/humble_ws/src/qcar_initial/install/qcar_initial/share/qcar_initial/local_setup.bash
+[7.751s] -- Installing: /home/amit/humble_ws/src/qcar_initial/install/qcar_initial/share/qcar_initial/local_setup.sh
+[7.751s] -- Installing: /home/amit/humble_ws/src/qcar_initial/install/qcar_initial/share/qcar_initial/local_setup.zsh
+[7.751s] -- Installing: /home/amit/humble_ws/src/qcar_initial/install/qcar_initial/share/qcar_initial/local_setup.dsv
+[7.751s] -- Installing: /home/amit/humble_ws/src/qcar_initial/install/qcar_initial/share/qcar_initial/package.dsv
+[7.751s] -- Installing: /home/amit/humble_ws/src/qcar_initial/install/qcar_initial/share/ament_index/resource_index/packages/qcar_initial
+[7.751s] -- Installing: /home/amit/humble_ws/src/qcar_initial/install/qcar_initial/share/ament_index/resource_index/nav2_mppi_controller__pluginlib__plugin/qcar_initial
+[7.751s] -- Installing: /home/amit/humble_ws/src/qcar_initial/install/qcar_initial/share/qcar_initial/cmake/ament_cmake_export_include_directories-extras.cmake
+[7.751s] -- Installing: /home/amit/humble_ws/src/qcar_initial/install/qcar_initial/share/qcar_initial/cmake/ament_cmake_export_libraries-extras.cmake
+[7.751s] -- Installing: /home/amit/humble_ws/src/qcar_initial/install/qcar_initial/share/qcar_initial/cmake/ament_cmake_export_dependencies-extras.cmake
+[7.752s] -- Installing: /home/amit/humble_ws/src/qcar_initial/install/qcar_initial/share/qcar_initial/cmake/qcar_initialConfig.cmake
+[7.752s] -- Installing: /home/amit/humble_ws/src/qcar_initial/install/qcar_initial/share/qcar_initial/cmake/qcar_initialConfig-version.cmake
+[7.752s] -- Installing: /home/amit/humble_ws/src/qcar_initial/install/qcar_initial/share/qcar_initial/package.xml
+[7.754s] Invoked command in '/home/amit/humble_ws/src/qcar_initial/build/qcar_initial' returned '0': CMAKE_PREFIX_PATH=${CMAKE_PREFIX_PATH}:/opt/ros/humble /usr/bin/cmake --install /home/amit/humble_ws/src/qcar_initial/build/qcar_initial

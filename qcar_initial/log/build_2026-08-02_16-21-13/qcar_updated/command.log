@@ -1,0 +1,4 @@
+Invoking command in '/home/amit/humble_ws/src/qcar_initial/build/qcar_initial': CMAKE_PREFIX_PATH=${CMAKE_PREFIX_PATH}:/opt/ros/humble /usr/bin/cmake --build /home/amit/humble_ws/src/qcar_initial/build/qcar_initial -- -j12 -l12
+Invoked command in '/home/amit/humble_ws/src/qcar_initial/build/qcar_initial' returned '0': CMAKE_PREFIX_PATH=${CMAKE_PREFIX_PATH}:/opt/ros/humble /usr/bin/cmake --build /home/amit/humble_ws/src/qcar_initial/build/qcar_initial -- -j12 -l12
+Invoking command in '/home/amit/humble_ws/src/qcar_initial/build/qcar_initial': CMAKE_PREFIX_PATH=${CMAKE_PREFIX_PATH}:/opt/ros/humble /usr/bin/cmake --install /home/amit/humble_ws/src/qcar_initial/build/qcar_initial
+Invoked command in '/home/amit/humble_ws/src/qcar_initial/build/qcar_initial' returned '0': CMAKE_PREFIX_PATH=${CMAKE_PREFIX_PATH}:/opt/ros/humble /usr/bin/cmake --install /home/amit/humble_ws/src/qcar_initial/build/qcar_initial
