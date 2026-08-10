@@ -60,12 +60,41 @@ dev-PC-side code, built via this package's normal `colcon build` like
    `qcar_bridge.py`, and `qcar_lidar_node.py` → `/scan` was validated
    separately in the same session (see "Validation log" below for the full
    story, including two real bugs found and fixed along the way).
-2. **Phase 2 — SLAM (next up)**. Migrate `qcar_updated`'s Cartographer-based
-   SLAM stack. `/scan` is already available from Phase 1; requires extending
-   `qcar_bridge.py` + `qcar_relay_node.py` to also carry `/odom` (encoder
-   dead-reckoning) and `/tf`.
-3. **Phase 3 — Nav2**. Migrate `qcar_updated`'s Nav2/MPPI stack, verify
-   autonomous goal-reaching on real hardware.
+2. **Phase 2 — SLAM. ✅ Confirmed working end-to-end on real hardware,
+   2026-08-06.** Migrated `qcar_updated`'s Cartographer-based SLAM stack via
+   `launch/qcar_slam.launch.py` + `config/cartographer/qcar_2d.lua` (copied
+   from `qcar_updated` unchanged). Turned out **not** to need `/odom`/`/tf`
+   extension after all — `qcar_2d.lua` has `use_odometry = false` and
+   `provide_odom_frame = true`, so Cartographer computes the whole
+   `map→odom→base` chain itself from `/scan` alone (pure LiDAR
+   scan-matching SLAM), same as it does in the Gazebo sim version. Only
+   needed a working `/scan` (already had it from Phase 1) and the
+   `base→lidar` static transform (`robot_state_publisher`, via
+   `qcar_visualize.launch.py`, which `qcar_slam.launch.py` includes). First
+   real map saved to `~/qcar_map.pgm`/`.yaml` — see "Validation log".
+3. **Phase 3 — Nav2. Plumbing built and confirmed bringing up cleanly on
+   real hardware, 2026-08-06 — autonomous goal-reaching not yet attempted.**
+   Migrated `qcar_updated`'s Nav2/MPPI stack via `launch/qcar_nav2.launch.py`
+   + `config/nav2/nav2_params.yaml` (adapted: `use_sim_time: false`
+   throughout, `EarlyCommitCritic` deliberately left out for this first
+   pass — see "Known risks") + `config/nav2/behavior_trees/*.xml` (copied
+   unchanged) + `maps/qcar_map.yaml` (Phase 2's saved map). Unlike Phase 2,
+   this **did** need real odometry — AMCL looks up a live `odom→base` TF at
+   every scan callback, which Cartographer's pure-SLAM approach never
+   required. Added wheel-odometry dead reckoning to `qcar_bridge.py`
+   (encoder-based, sent back over the same TCP connection cmd_vel arrives
+   on) and `/odom` + TF publishing to `qcar_relay_node.py`, tested
+   separately on hardware first (real motion confirmed: `linear.x: 0.3` for
+   3s produced `/odom` reading `x: 1.25m`, `v: ~0.37 m/s`) before building
+   Nav2 on top of it. Full `bringup_launch.py` stack (AMCL, both costmaps,
+   planner, MPPI controller, behavior/bt_navigator/waypoint_follower/
+   velocity_smoother) came up and reached "Managed nodes are active" for
+   both lifecycle managers on the first attempt, no crashes. **Deliberately
+   did not send a real navigation goal yet** — the odometry this all
+   depends on is only as accurate as the steering trim, which was unfixed
+   at the time. That's now resolved (see "Known risks" — software
+   `STEERING_TRIM` calibrated via real driving tests, 2026-08-06) — a real
+   navigation goal test is the next step whenever that's picked back up.
 
 Each phase should be confirmed working end-to-end on the physical QCar
 before starting the next.
@@ -189,13 +218,234 @@ trim finding.**
   `sudo ss -tlnp | grep -E "5555|5556"` shows nothing, don't assume the
   sequence worked just because it was run.
 
+**Later same day — Phase 2 (SLAM) tested live on real hardware, confirmed
+working, first map saved.**
+- Brought up the full chain (motor bridge, LiDAR node, relay node,
+  `qcar_slam.launch.py`) with the QCar grounded (not elevated) in a closed
+  space. `cartographer_node` inserted its first submap within a second of
+  starting and kept building from there - confirmed via both the log output
+  and `ros2 topic echo /map --field info`, map size actively growing over
+  time (real occupancy grid data, not just a placeholder).
+- Found and fixed a real bug hit only when actually using `ros2 run`
+  instead of invoking scripts directly: `qcar_relay_node.py` was missing
+  its executable bit (created without `+x`), so it silently didn't show up
+  in `ros2 pkg executables qcar_hardware` - `chmod +x` fixed it immediately,
+  no rebuild needed since `--symlink-install` points straight at the
+  source file. See "Known risks" below.
+- Drove the QCar around with `qcar_teleop_twist.py` to build out the map,
+  then saved it with `nav2_map_server`'s `map_saver_cli`
+  (`ros2 run nav2_map_server map_saver_cli -f ~/qcar_map --ros-args -p
+  save_map_timeout:=5.0`) - produced `qcar_map.pgm` + `qcar_map.yaml`
+  (147×145 cells @ 5cm/pixel, ≈7.35m × 7.25m mapped). **First real map from
+  the physical QCar** - this becomes the static map Phase 3 (Nav2) will
+  use.
+- **Result: Phase 2 (SLAM) confirmed working end-to-end on real hardware.**
+
+**Later same day — replaced the first map with a corrected pass** (moved
+into `maps/` per the user's request, then overwritten in place with a
+better/larger map, 155×167 cells, after the first save was found to be
+wrong - `map_saver_cli` overwrites cleanly when pointed at the same `-f`
+path while `qcar_slam.launch.py` is still up).
+
+**Later same day — Phase 3 (Nav2) plumbing built and confirmed bringing up
+cleanly on real hardware, autonomous goal-reaching not yet attempted.**
+- Realized partway through planning this that AMCL (unlike Cartographer)
+  needs a live `odom→base` TF, since it looks that up at every scan
+  callback to track motion between localization corrections - Phase 2
+  never needed this because Cartographer computes its own odometry
+  internally from `/scan` scan-matching alone. This meant the wheel-
+  odometry extension originally scoped for Phase 2 (then found
+  unnecessary there) was needed after all, just one phase later than
+  planned.
+- Checked in on the steering trim status before building on odometry that
+  depends on it - **still not physically fixed** as of this session.
+  Proceeded with building the odometry code anyway (useful regardless of
+  when the trim gets fixed) but treated live-tested accuracy as
+  provisional, and deliberately stopped short of sending a real navigation
+  goal once Nav2 was up - see below.
+- Added encoder-based dead reckoning to `qcar_bridge.py` (same formula
+  already documented: `distance(m) = encoderCounts * (1/2880) * 0.01977`),
+  sent back to the dev PC over the *same* TCP connection `/cmd_vel` arrives
+  on (TCP is full-duplex, no new port needed) - `qcar_relay_node.py`
+  reads it and publishes `/odom` + broadcasts `odom→base` TF. Tested this
+  in isolation before touching Nav2 at all: `/odom` published at ~45Hz,
+  all zeros at rest: correct; commanded `linear.x: 0.3` for 3s produced
+  `x: 1.25m`, `v: ~0.37 m/s`, `y` staying at 0 (straight line, no steering
+  commanded) - real, plausible numbers, pipeline confirmed working
+  end-to-end before layering Nav2 on top.
+- Given the custom `EarlyCommitCritic` MPPI plugin decision from earlier
+  (start simpler, add later), copied `qcar_updated`'s `nav2_params.yaml`
+  with `EarlyCommitCritic` removed from the critics list and its tuned
+  parameters preserved as a comment block (not deleted - real, hard-won
+  live-tested values, for whenever the plugin migration happens) alongside
+  a `use_sim_time: true` → `false` sweep across all 13 occurrences.
+  `behavior_trees/*.xml` (the "no `<Spin>` recovery, replan only when
+  needed" customization) copied unchanged - applies regardless of
+  hardware/sim or the critic decision.
+- `launch/qcar_nav2.launch.py` (`qcar_visualize.launch.py` include for
+  `robot_state_publisher`/TF, then `nav2_bringup`'s `bringup_launch.py`
+  with our map/params, no Gazebo) brought the **entire** Nav2 stack up on
+  the first attempt with the full onboard chain running (motor bridge +
+  LiDAR node + relay node): both lifecycle managers
+  (localization/navigation) reached "Managed nodes are active", every
+  server (controller, smoother, planner, behavior, bt_navigator,
+  waypoint_follower, velocity_smoother) activated cleanly, all expected
+  topics present (`/amcl_pose`, `/particle_cloud`, `/plan`, both
+  costmaps), no crashes, stable/quiescent once settled - no crash-loop.
+  Global costmap sized itself to 155×167 - correctly matching the saved
+  map.
+- **Deliberately stopped here without sending a navigation goal.** The
+  localization/planning this all depends on is only as accurate as the
+  dead-reckoning odometry, which is only as accurate as the steering trim
+  - still open at the time. Sending a real autonomous goal then would have
+  meant navigating on known-uncorrected drift. See below for how this got
+  resolved the same day.
+
+**Later same day — steering trim fixed in software, calibrated via real
+driving tests.**
+- Physical linkage adjustment turned out not to be available on this
+  chassis ("cannot be corrected manually") - pivoted to a software fix:
+  `STEERING_TRIM`, a constant added to `qcar_bridge.py`, applied only at
+  the `car.write()` call site.
+- Calibrated interactively: started with a static test (motor off, held
+  fixed candidate angles, judged by eye against straight) to get roughly
+  close (-0.05 too left, -0.09 close), then refined with real straight-line
+  driving tests (drive N meters, physically measure lateral offset) for
+  actual precision - static visual judgment alone isn't precise enough.
+  Iterated through -0.09 (0.1m right drift over 4.5m), a computed
+  correction to -0.0678 that overshot into a left drift, -0.085 (0.2m
+  right drift over 5.3m - noisier, likely partly due to imprecise vehicle
+  aiming at test start, not purely the trim value), and settled on -0.08
+  after a ~4.4m drive showed no reported drift. Accepted as "almost
+  accurate" (user's call), not a mathematically perfect zero.
+- **Caught a real bug in the first implementation along the way**: trim
+  was initially folded into the same steering value used for both the real
+  servo command *and* the odometry's dead-reckoning math. Since trim's
+  whole purpose is making the real wheels read ~0 despite a nonzero servo
+  command, feeding that same trimmed value into the odometry made it
+  believe the wheels were physically deflected by the trim amount even
+  while driving dead straight - a live straight-line test briefly produced
+  a fictitious ~30-degree fake curve in `/odom` before this was caught.
+  Fixed by keeping the untrimmed/kinematic steering angle for odometry and
+  only computing the trimmed servo command separately, right before
+  `car.write()` (see `qcar_bridge.py`'s `compute_steering()` vs.
+  `apply_trim()`).
+- **Result: steering trim resolved, `/odom` now correctly reads `y: 0.0`
+  for real straight-line driving.** Phase 3 is unblocked - a real
+  navigation goal test is the next step.
+
+**Later same day — first real Nav2 goal test (run independently, not via
+this session) surfaced a new issue: sudden AMCL localization jumps
+(LiDAR points visibly snapping in RViz) and path deviation on both
+straight and curved segments.**
+- Ruled out the already-known `EarlyCommitCritic` gap as the primary cause
+  - that would only explain curve-specific deviation, not straight-segment
+  deviation too.
+- Working theory: `qcar_bridge.py`'s dead-reckoning assumes the steering
+  servo reaches a commanded angle instantly, but
+  `documents/user_manual_system_hardware.pdf` documents a real steering
+  time constant of τ=0.16s. Under continuous MPPI control (which samples
+  small steering corrections even on nominally "straight" segments via
+  `vx_std`/`wz_std` noise), this unmodeled lag accumulates real heading
+  error continuously, not just during obvious turns - AMCL then has to
+  correct that accumulated error in a sudden jump when it re-localizes
+  against the real LiDAR scan.
+- First mitigation applied: raised AMCL's `alpha1-5` in
+  `config/nav2/nav2_params.yaml` from `0.4` to `0.6` (the sim version had
+  already gone `0.2` → `0.4` for this exact symptom category - "map->odom
+  TF jumps... during maneuvering" - so this is a continuation of the same
+  tuning direction, not a new idea). **Reverted at the user's request**
+  before re-testing - see below for what actually turned out to be wrong.
+
+**Later same day — real root cause found via video review + the user's own
+precise diagnosis ("transform issue"), fixed via corrected timestamps, not
+AMCL tuning.**
+- The AMCL-alpha and servo-lag theories above were both superseded once the
+  user provided a screen recording of an actual goal run and described the
+  symptom precisely: the LiDAR scan's *shape* stayed internally coherent
+  (not random noise/divergence) but the whole scan was rigidly offset from
+  the static map, tracking the robot's motion - "it feels like the map is
+  staying still, but the skeleton of the map is moving... the robot follows
+  the dotted LiDAR map... not the original map." Confirmed by extracting
+  frames from the video (OpenCV) and comparing scan-to-map alignment
+  directly: near-perfect at the start, badly diverged mid-maneuver
+  (diagonal streaks of scan points cutting through open space, nowhere
+  near any wall), partially recovering later. A coherent rigid offset that
+  tracks with motion, rather than random noise, is the signature of a
+  *timing* problem, not a spatial one - which is exactly what the user's
+  own "transform issue" instinct was pointing at.
+- Also checked qcar_updated's own `CHANGELOG.md` for a matching sim-side
+  history (a very close-sounding "robot deviates mid-curve, corrects by
+  curve end" entry, 2026-08-02) - the user confirmed this was a different
+  issue, so that lead wasn't pursued further, but it's worth knowing that
+  entry exists if a genuine goal-shape-dependent MPPI limitation shows up
+  again later.
+- **Actual root cause**: `qcar_relay_node.py` was stamping `/scan` and
+  `/odom` using the dev PC's *receipt* time (`self.get_clock().now()`),
+  not the QCar's actual *capture* time. `/scan` and `/odom` travel over
+  two independent TCP connections with independent, uncorrelated network
+  latency (this WiFi link's jitter was already documented, 87-300ms+) -
+  so a scan that happened to arrive a bit later than usual got paired by
+  AMCL against an odom-derived pose that had already moved on, producing
+  exactly the "shape preserved, whole thing rigidly shifted" pattern.
+  Confirmed the QCar and dev PC clocks are meaningfully unsynchronized
+  (~0.50s offset, measured via a round-trip-corrected `date`+SSH check,
+  averaged over 5 trials, tightly clustered) - not accounted for anywhere
+  before this.
+- **Fix**: `qcar_bridge.py` and `qcar_lidar_node.py` now include their own
+  QCar-side capture timestamp (`time.time()`) in every message instead of
+  leaving the relay to stamp at receipt time. `qcar_relay_node.py` gained
+  a `qcar_clock_offset` parameter and converts each QCar timestamp into a
+  dev-PC-clock-equivalent stamp before publishing - see that file's
+  module docstring for the measurement procedure (must be re-measured each
+  session; offset can drift if either machine reboots or its own NTP
+  client re-syncs). **Deliberately not fixed via system-level NTP/chrony**
+  even though that was tried first (an `allow` rule was added to the dev
+  PC's `chrony.conf` then reverted) - the QCar is shared lab hardware, and
+  leaving a persistent system config pointing at one user's personal dev
+  PC as a time source isn't good practice for infrastructure other people
+  also use. The software-side correction is fully self-contained to this
+  package's own code and touches no shared system state.
+- Verified after the fix: `/scan`/`/odom` timestamps land close to "now"
+  minus genuine one-way network latency (not clock-skew-inflated), TF
+  lookups (`odom`→`base`) resolve cleanly with no extrapolation/repeated-
+  data warnings. **Not yet re-tested with a real Nav2 goal** - next step
+  whenever Nav2 testing resumes, with AMCL's `alpha1-5` back at the
+  original `0.4` (the timestamp fix is the real fix; the alpha tuning was
+  chasing the wrong cause).
+
 ## Known risks / open items
 
-- **Steering mechanical center is offset from `steering=0.0`'s commanded
-  center** - wheels sit visibly left of straight even when actively
-  commanded to 0. Confirmed 2026-08-03, not yet fixed - user plans a
-  physical linkage adjustment. Re-verify straight before trusting Phase 2
-  odometry, which assumes commanded steering angle reflects the real one.
+- **Steering mechanical center offset - fixed in software, 2026-08-06.**
+  No adjustable physical linkage turned out to be available on this
+  chassis, so this was corrected with a `STEERING_TRIM` constant in
+  `qcar_bridge.py` (`-0.08` rad) instead of a mechanical adjustment.
+  Calibrated iteratively on real hardware: an interactive static test
+  (motor off, held candidate angles, judged by eye) got close, then a
+  sequence of real straight-line driving tests (drive N meters, measure
+  actual lateral offset) refined it further - see the constant's own
+  comment in `qcar_bridge.py` for the full numeric history. Accepted as
+  "almost accurate" (user's call), not a mathematically perfect zero.
+  Applying the trim surfaced a real bug along the way: the first
+  implementation folded the trim into the *same* value used for both the
+  real servo command and the odometry's dead-reckoning math, so the
+  odometry started believing the trimmed servo command was a real physical
+  wheel deflection - a straight-line test briefly showed a fictitious
+  ~30-degree fake curve before this was caught and fixed (trim now only
+  applied at the `car.write()` call site, never upstream of the odometry).
+  If drift reappears or matters more for a future use case (tighter Nav2
+  tolerances, etc.), re-run the driving-test calibration procedure rather
+  than adjusting from static/visual judgment alone.
+- **`EarlyCommitCritic` (custom MPPI plugin) deliberately left out of
+  Phase 3's first pass** - see `config/nav2/nav2_params.yaml`'s comment
+  block for the full reasoning and the preserved tuned parameter values.
+  It exists to stop MPPI settling into a near-straight local optimum
+  instead of committing to a path's initial curvature - if the robot is
+  seen cutting corners or drifting off newly-started curves during real
+  goal-reaching tests, this is the most likely reason, and the fix is
+  migrating the plugin from `qcar_updated` (C++ build with a documented
+  ABI-sensitive xtensor/xsimd compile-flag requirement - see that
+  package's `CMakeLists.txt`).
 - **Dashing↔Humble native ROS2 pub/sub does not interoperate — confirmed on
   hardware, 2026-08-03.** Tested directly: `ros2 run demo_nodes_cpp talker`
   (QCar, Dashing) never reached `demo_nodes_py listener` (dev PC, Humble),
@@ -236,6 +486,15 @@ trim finding.**
   hardware code, for local regression-testing of migrated logic before
   trying it on real hardware (decided 2026-08-03) — this package is
   dual-purpose (sim + hardware) by design, not transitional.
+- **New dev-PC scripts under `scripts/` need `chmod +x` before they'll show
+  up in `ros2 pkg executables`/`ros2 run`** — with `--symlink-install`, the
+  installed "binary" is a symlink straight to the source file, so the
+  source itself needs the executable bit, not just correct install rules in
+  `CMakeLists.txt`. `qcar_relay_node.py` was missing it (created without
+  `+x`) and silently worked anyway during development because it was always
+  invoked directly as `python3 scripts/qcar_relay_node.py`, not
+  `ros2 run` — only surfaced when actually trying `ros2 run`. Fixed
+  2026-08-03.
 
 ## Stopping everything (real hardware)
 
@@ -260,9 +519,31 @@ without `-INT`**, see "Known risks" above:
 - `launch/qcar_visualize.launch.py` — real-hardware visualization
   (`robot_state_publisher` + `joint_state_publisher` + `rviz2`, no Gazebo);
   reuses `rviz/qcar.rviz` as-is
+- `launch/qcar_slam.launch.py` — Phase 2, real-hardware SLAM: includes
+  `qcar_visualize.launch.py` and layers `cartographer_node` +
+  `cartographer_occupancy_grid_node` on top, using
+  `config/cartographer/qcar_2d.lua`
+- `launch/qcar_nav2.launch.py` — Phase 3, real-hardware Nav2: includes
+  `qcar_visualize.launch.py`, then `nav2_bringup`'s `bringup_launch.py`
+  with `maps/qcar_map.yaml` + `config/nav2/nav2_params.yaml`
+  (`use_sim_time: false`, BT XML overrides via `RewrittenYaml`), no Gazebo,
+  no Cartographer (AMCL against the static map instead of live SLAM)
 - `urdf/`, `worlds/`, `models/`, `rviz/` — shared between sim and hardware
   visualization (the URDF and RViz config don't care which launch file
   brought them up)
+- `config/cartographer/qcar_2d.lua` — copied unchanged from `qcar_updated`,
+  shared between the sim and hardware SLAM launches
+- `config/nav2/nav2_params.yaml` — adapted from `qcar_updated`
+  (`use_sim_time: false`, `EarlyCommitCritic` removed from the critics list
+  with its tuned values preserved as a comment - see "Known risks");
+  `config/nav2/behavior_trees/*.xml` copied unchanged
+- `maps/qcar_map.pgm` + `maps/qcar_map.yaml` — real map built from the
+  physical QCar via Phase 2, saved with `nav2_map_server`'s
+  `map_saver_cli`. This is the static map Phase 3 (Nav2) will load.
+  Replaced 2026-08-06 with a better/corrected pass (155×167 cells @
+  5cm/pixel) after the first save (147×145) was found to be wrong — if
+  this needs replacing again, just re-run `map_saver_cli` with the same
+  `-f` path while `qcar_slam.launch.py` is up, it overwrites in place.
 - `qcar_onboard/` — staging area for code that gets deployed to and run on
   the QCar's onboard computer directly; **not** part of this package's ROS2
   build graph (currently: `qcar_bridge.py`, `qcar_lidar_node.py`). Deployed

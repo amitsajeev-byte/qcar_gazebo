@@ -200,7 +200,7 @@ Visualization Manager:
       Enabled: true
       Name: MarkerArray
       Namespaces:
-        {}
+        Trajectory 0: true
       Topic:
         Depth: 5
         Durability Policy: Volatile
@@ -267,7 +267,7 @@ Visualization Manager:
   Enabled: true
   Global Options:
     Background Color: 48; 48; 48
-    Fixed Frame: base
+    Fixed Frame: map
     Frame Rate: 30
   Name: root
   Tools:
@@ -319,7 +319,7 @@ Visualization Manager:
       Invert Z Axis: false
       Name: Current View
       Near Clip Distance: 0.009999999776482582
-      Scale: 114.45557403564453
+      Scale: 174.475341796875
       Target Frame: <Fixed Frame>
       Value: TopDownOrtho (rviz_default_plugins)
       X: 0.9169203042984009
@@ -343,5 +343,5 @@ Window Geometry:
   Views:
     collapsed: true
   Width: 1850
-  X: 1990
+  X: 70
   Y: 0

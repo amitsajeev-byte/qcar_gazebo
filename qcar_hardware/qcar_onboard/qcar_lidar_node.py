@@ -15,8 +15,14 @@ newline-delimited JSON scan messages, and republishes them as a real
 sensor_msgs/LaserScan on /scan for the rest of the Humble-side stack.
 
 Wire format, one JSON object per line:
-    {"angle_min": <rad>, "angle_max": <rad>, "angle_increment": <rad>,
-     "range_min": <m>, "range_max": <m>, "ranges": [<m>, ...]}
+    {"t": <QCar time.time() at capture>, "angle_min": <rad>, "angle_max": <rad>,
+     "angle_increment": <rad>, "range_min": <m>, "range_max": <m>, "ranges": [<m>, ...]}
+
+The "t" field is this QCar's own time.time() at capture, not a receipt-time
+stamp - see qcar_bridge.py's module docstring for why (confirmed on
+hardware 2026-08-06: receipt-time stamping on two independently-latent TCP
+connections caused AMCL to pair scans with stale poses, producing a
+coherent rigid offset between the live scan and the map).
 '''
 import json
 import math
@@ -50,6 +56,7 @@ RANGE_MAX = 12.0
 
 
 def read_scan(lidar):
+    capture_time = time.time()
     lidar.read()
 
     # myLidar.angles/distances are parallel arrays of raw samples - not
@@ -76,6 +83,7 @@ def read_scan(lidar):
             ranges[idx] = float(dist)
 
     return {
+        't': capture_time,
         'angle_min': -math.pi,
         'angle_max': math.pi,
         'angle_increment': increment,

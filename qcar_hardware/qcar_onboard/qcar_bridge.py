@@ -14,8 +14,34 @@ listens on a plain TCP socket for newline-delimited JSON drive commands from
 scripts/qcar_relay_node.py on the dev PC (the only thing that still speaks
 ROS2 - it bridges this socket to /cmd_vel on the Humble side).
 
-Wire format, one JSON object per line:
-    {"linear_x": <float m/s equivalent>, "angular_z": <float rad/s>}
+Wire format, one JSON object per line, one direction each way on the same
+connection (TCP is full-duplex - no separate port needed):
+    dev PC -> QCar: {"linear_x": <float m/s equivalent>, "angular_z": <float rad/s>}
+    QCar -> dev PC: {"t": <QCar time.time() at capture>, "x": <m>, "y": <m>,
+                      "yaw": <rad>, "v": <m/s>, "yaw_rate": <rad/s>}
+
+The odometry direction was added for Phase 3 (Nav2/AMCL) - AMCL looks up a
+live odom->base TF at every scan callback to track motion between
+localization corrections, which Phase 2 (Cartographer, pure LiDAR
+scan-matching) never needed. This is open-loop dead reckoning: there's no
+separate steering-angle feedback sensor in this HAL (confirmed by grepping
+every reference script), so the yaw-rate integration below uses the
+last-*commanded* steering angle, not a measured one - accuracy depends on
+the vehicle's steering mechanical center actually matching steering=0.0.
+See hardware_integration_reference.md and README.md's "Known risks" for the
+steering-trim caveat this depends on.
+
+The "t" field is this QCar's own time.time() at the moment of capture, not
+a receipt-time stamp - confirmed on hardware 2026-08-06 that timestamping
+at receipt time on the dev PC side (independent, uncorrelated latency on
+this TCP connection vs the LiDAR one) caused AMCL to pair scans with
+poses from a slightly different real-world instant, producing a
+coherent rigid offset between the live scan and the map ("the LiDAR dots
+move... maintaining the shape... the skeleton of the map is moving" - the
+user's own precise description). qcar_relay_node.py converts this into a
+dev-PC-clock-equivalent timestamp using a measured clock offset - see that
+file's docstring for the full explanation and the offset measurement
+procedure.
 
 See hardware_integration_reference.md for the HAL API this wraps and why
 the ROS2-to-ROS2 approach was dropped.
@@ -49,6 +75,31 @@ WHEELBASE = 0.25725
 # from the vehicle's physical max steering angle (0.5236 rad / 30 deg).
 MAX_STEER_CMD = 0.5
 
+# Compensates for this vehicle's steering mechanical center being offset
+# from steering=0.0 (wheels sit visibly left of straight when commanded to
+# 0 - confirmed on hardware 2026-08-03/06). No adjustable physical linkage
+# is available on this chassis, so corrected in software instead.
+#
+# Calibrated iteratively on hardware, 2026-08-06, first via an interactive
+# static test (motor off, held candidate angles, visually judged against
+# straight - -0.05 too left, -0.09 "almost correct"), then refined via a
+# sequence of real straight-line driving tests (drive N meters at
+# angular.z=0, measure actual lateral offset). Distance-based measurement
+# is far more precise than eyeballing a stationary wheel angle - prefer it
+# for any further refinement. History (some noise expected - offset also
+# depends on how precisely the vehicle was aimed at the start of each
+# test, not purely the trim value):
+#   trim     distance   offset        direction needed
+#   -0.09     4.5m      0.1m right    less negative (toward 0)
+#   -0.0678   ?         drifted left  more negative (overshot the above)
+#   -0.085    5.3m      0.2m right    less negative
+#   -0.08     ~4.4m      no visible drift reported - ACCEPTED
+# Accepted as "almost accurate" (user's call, 2026-08-06), not a perfect
+# zero - if drift reappears or matters more for a future use case (e.g.
+# tighter Nav2 tolerances), re-run the driving-test procedure above rather
+# than adjusting from static/visual judgment alone.
+STEERING_TRIM = -0.08
+
 # PWM duty-cycle safety limits (documents/user_manual_troubleshooting.pdf):
 # saturate to +/-30% magnitude, rate-limited to 100% duty-cycle change per
 # second, to avoid a battery-brownout-triggered shutdown.
@@ -71,14 +122,72 @@ CMD_TIMEOUT = 0.5  # seconds
 READ_RATE = 50.0  # Hz
 LISTEN_PORT = 5555
 
+# Encoder counts -> distance (documents/user_manual_system_hardware.pdf,
+# derived from the drive motor's gear ratio and wheel radius):
+# distance(m) = encoderCounts * (1/2880) * 0.01977
+METERS_PER_COUNT = 0.01977 / 2880.0
+
 
 def compute_steering(linear_x, angular_z):
+    # Returns the KINEMATIC (untrimmed) steering angle - the real physical
+    # wheel angle the bicycle model wants, used for odometry and the LED
+    # turn-indicator logic. STEERING_TRIM must NOT be folded in here: an
+    # earlier version did, and it corrupted the odometry - target_steering
+    # was being reused as the "real physical angle" input to
+    # Odometry.update(), so trimming it there made the dead-reckoning math
+    # believe the wheels were deflected by the trim amount even while
+    # driving arrow-straight (trim's whole purpose is to make the REAL
+    # wheels read ~0 despite a nonzero servo command - counting that same
+    # command as a real deflection is exactly backwards). Confirmed on
+    # hardware 2026-08-06: with trim folded in here, a straight-line drive
+    # test produced a fictitious ~30-degree odometry curve. See apply_trim()
+    # below for where STEERING_TRIM actually belongs - only at the
+    # car.write() call site, never upstream of it.
+    #
     # A car-like steering axle can't produce a meaningful angle at a
     # standstill, so hold steering at 0 rather than divide by ~0.
     if abs(linear_x) < 1e-2:
-        return 0.0
-    steer = math.atan(WHEELBASE * angular_z / linear_x)
+        steer = 0.0
+    else:
+        steer = math.atan(WHEELBASE * angular_z / linear_x)
     return max(-MAX_STEER_CMD, min(MAX_STEER_CMD, steer))
+
+
+def apply_trim(kinematic_steering):
+    '''Converts a real/kinematic steering angle into the servo command that
+    actually achieves it on this specific vehicle - only call this right
+    before car.write(), never before odometry or anything else that cares
+    about the real physical wheel angle.'''
+    return max(-MAX_STEER_CMD, min(MAX_STEER_CMD, kinematic_steering + STEERING_TRIM))
+
+
+class Odometry:
+    '''Bicycle-model dead reckoning from encoder deltas + last-commanded
+    steering angle. Reset at the start of each new relay connection - odom
+    is a purely local/relative frame by ROS convention, doesn't need to
+    persist across reconnects.'''
+
+    def __init__(self):
+        self.x = 0.0
+        self.y = 0.0
+        self.yaw = 0.0
+        self.last_encoder = None
+
+    def update(self, encoder_counts, steering, dt):
+        if self.last_encoder is None:
+            self.last_encoder = encoder_counts
+        delta_counts = encoder_counts - self.last_encoder
+        self.last_encoder = encoder_counts
+
+        distance = delta_counts * METERS_PER_COUNT
+        v = distance / dt
+        yaw_rate = v * math.tan(steering) / WHEELBASE
+
+        self.yaw += yaw_rate * dt
+        self.x += distance * math.cos(self.yaw)
+        self.y += distance * math.sin(self.yaw)
+
+        return {'x': self.x, 'y': self.y, 'yaw': self.yaw, 'v': v, 'yaw_rate': yaw_rate}
 
 
 def main():
@@ -108,6 +217,7 @@ def main():
             print('dev PC relay connected from', addr)
             buf = b''
             last_cmd_time = time.time()
+            odom = Odometry()
 
             try:
                 while True:
@@ -166,7 +276,19 @@ def main():
                         leds[5] = 1
 
                     car.read()
-                    car.write(current_throttle, target_steering, leds)
+                    car.write(current_throttle, apply_trim(target_steering), leds)
+
+                    # Odometry uses the untrimmed/kinematic angle - see
+                    # compute_steering()'s docstring for why.
+                    odom_data = odom.update(float(car.motorEncoder[0]), target_steering, dt)
+                    # Capture-time timestamp, not send-time - see this file's
+                    # module docstring for why this matters.
+                    odom_data['t'] = time.time()
+                    try:
+                        conn.sendall((json.dumps(odom_data) + '\n').encode('utf-8'))
+                    except OSError:
+                        print('dev PC relay disconnected (send failed)')
+                        break
             finally:
                 conn.close()
                 # Lost the relay connection - stop immediately rather than
@@ -174,12 +296,12 @@ def main():
                 target_linear = 0.0
                 target_steering = 0.0
                 current_throttle = 0.0
-                car.write(0.0, 0.0, [0, 0, 0, 0, 0, 0, 0, 0])
+                car.write(0.0, apply_trim(0.0), [0, 0, 0, 0, 0, 0, 0, 0])
     except KeyboardInterrupt:
         pass
     finally:
         try:
-            car.write(0.0, 0.0, [0, 0, 0, 0, 0, 0, 0, 0])
+            car.write(0.0, apply_trim(0.0), [0, 0, 0, 0, 0, 0, 0, 0])
         except Exception:
             pass
         car.terminate()
