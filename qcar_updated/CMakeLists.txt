@@ -79,6 +79,8 @@ install(PROGRAMS
   scripts/qcar_teleop_twist.py
   scripts/qcar_relay_node.py
   scripts/check_stop_latency.py
+  scripts/drive_and_log.py
+  scripts/monitor_goal_timing.py
   DESTINATION lib/${PROJECT_NAME}
 )
 

@@ -1,5 +1,97 @@
 # Changelog
 
+## 2026-08-17 - Stop-latency root-cause dig started, interrupted by dead QCar battery
+
+**`qcar_bridge.py` currently has a temporary `[DBG]` print re-added to the
+control loop** (logs `target_linear`, `current_throttle`, and real encoder
+`v` together, QCar-local clock, no network involved) - NOT the clean state
+described in the THROTTLE_GAIN entry below. Left in deliberately to resume
+this diagnostic next session; remove once resolved.
+
+Prompted by the settled-distance table (below) showing a consistent
+increase in extra distance across speeds while stop latency itself stayed
+flat (~2.4-2.55s regardless of commanded speed) - re-examined the raw
+coast-phase velocity trace instead of assuming simple momentum/friction
+coasting. Found the coast is NOT smooth decay: velocity stays flat/even
+slightly elevated for ~2.0s after "stop commanded," then crashes to zero in
+~0.3-0.4s. Checked the Quanser HAL manuals for a documented drive-motor
+ramp/filter that could explain this - found none (only the steering servo
+has a documented time constant, 0.16s, nothing for the drive motor). This
+points at a command-delivery lag in our own software/relay pipeline rather
+than physical drivetrain coasting - a different conclusion than this
+investigation has carried until now.
+
+Was mid-way through capturing QCar-local `current_throttle`-vs-`v` data to
+determine whether the lag is in the real motor's hardware response or in
+our own software not delivering the stop command promptly, when **the
+QCar's battery died**, killing the SSH connection. Also hit and fixed a
+real gotcha along the way: piping a long-running process through `tee`
+block-buffers Python's stdout instead of line-buffering it, so nothing
+reaches the log file until the buffer fills or the process exits - fix is
+`python3 -u` (unbuffered) on the QCar-side launch command.
+
+See `qcar_updated_stop_distance_investigation` project memory for the full
+writeup and the exact next-session resume steps.
+
+## 2026-08-17 - "LiDAR dots shift with the robot" during Nav2 goals - root-caused, resolution paused
+
+Added `scripts/monitor_goal_timing.py` (wired into `CMakeLists.txt`) to
+instrument a single Nav2 goal end to end: exact timestamps + pose for goal
+sent, real motion start (from `/odom`, encoder ground truth), RViz-displayed
+motion start (from the `map->base` TF - what a human watching RViz actually
+sees), goal reached, real stop, and RViz-displayed stop. Two real bugs found
+and fixed while building it: (1) the default rclpy subscription QoS
+(VOLATILE durability) delivered zero messages against
+`/navigate_to_pose/_action/status`'s actual TRANSIENT_LOCAL publisher QoS -
+fixed by matching the QoS profile explicitly; (2) detecting "goal sent" via
+watching for status code ACCEPTED(1) missed goals that transition straight
+to EXECUTING(2) between two status publishes - fixed by tracking goal UUIDs
+instead (first time a never-before-seen goal_id appears = goal sent).
+
+**Root cause, measured**: the user's precise report ("real robot starts
+immediately, RViz shows it starting late, LiDAR dots visibly shift/catch up,
+same thing happens in reverse at the end") is actually TWO separate,
+unrelated phenomena:
+1. **Start of goal**: RViz's displayed motion lags the real robot by ~0.56s
+   (measured: real start +2.145s after goal sent, RViz start +2.705s - a
+   0.559s gap). This is a genuine but modest pipeline latency (network
+   transit + AMCL scan-matching + RViz's own subscribe/render overhead) -
+   NOT a TF-jump bug (map->odom was independently confirmed to update in
+   small smooth increments, not sudden discontinuities) and NOT fixable by
+   delaying the robot's motion (a constant downstream processing lag doesn't
+   shrink by delaying the triggering event - it just shifts both events
+   later by the same amount). Nav2's actual controller consumes the same
+   `/odom`/`/amcl_pose`/`/tf` topics directly, without RViz's additional
+   render overhead, so real navigation decisions are less stale than what's
+   visually displayed - this is a cosmetic-only issue.
+2. **End of goal**: the real robot kept moving for 2.238s after "goal
+   reached" was declared - matching, independently, the ~2.4-2.55s
+   stop-latency/coast behavior already characterized in the THROTTLE_GAIN
+   calibration work below (open-loop `drive_and_log.py` tests, which never
+   go through Nav2's controller at all, showed the same ~2.4-2.5s number).
+   This strongly indicates genuine drivetrain momentum/coast, not a Nav2
+   controller-tuning gap or display bug.
+
+**Resolution status**: paused here for this session, decision deferred.
+Options identified but not yet acted on: (a) tune MPPI's `GoalCritic`/
+deceleration-near-goal behavior so commanded velocity is already lower by
+the time the robot reaches `xy_goal_tolerance`, which would proportionally
+shrink (not eliminate) the coast per the already-established
+speed-scales-linearly-with-coast-distance relationship - lower risk than
+touching `qcar_bridge.py` directly; (b) accept the coast as a known,
+budgeted-for vehicle characteristic (the existing documented stance).
+Active braking remains explicitly off the table (see the safety-incident
+history below). See `qcar_updated_nav2_display_lag_investigation` project
+memory for the full writeup, including the exact timing table from the
+live hardware test.
+
+**Also re-confirmed working**: `qcar_clock_offset` (currently `0.17`,
+measured fresh this session) must be passed explicitly on every
+`qcar_relay_node.py` launch - forgetting it (which happened once this
+session, an oversight in a command given to the user) silently defaults to
+`0.0` and reintroduces the exact scan/odom timestamp-drift bug this
+parameter exists to fix.
+
 ## 2026-08-17 - THROTTLE_GAIN calibration finalized and validated across 0.2-0.5 m/s
 
 Final result of the day's calibration work (supersedes the two earlier

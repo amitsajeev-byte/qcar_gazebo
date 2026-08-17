@@ -331,6 +331,16 @@ def main():
                     # Capture-time timestamp, not send-time - see this file's
                     # module docstring for why this matters.
                     odom_data['t'] = time.time()
+                    # TEMP DEBUG 2026-08-17 - stop-latency root-cause check:
+                    # is current_throttle (our own software's commanded duty)
+                    # actually reaching zero promptly when target_linear
+                    # does, while real v stays high (-> hardware/motor lag),
+                    # or does current_throttle ITSELF stay nonzero for ~2s
+                    # (-> our own command isn't reaching the control loop
+                    # promptly)? QCar-local clock only, no network/relay
+                    # involved in this measurement. Remove once resolved.
+                    print('[DBG] t=%.3f target_linear=%.3f current_throttle=%.4f v=%.3f' % (
+                        odom_data['t'], target_linear, current_throttle, odom_data['v']))
                     try:
                         conn.sendall((json.dumps(odom_data) + '\n').encode('utf-8'))
                     except OSError:
