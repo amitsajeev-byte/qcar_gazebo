@@ -1,5 +1,121 @@
 # Changelog
 
+## 2026-08-17 - THROTTLE_GAIN calibration finalized and validated across 0.2-0.5 m/s
+
+Final result of the day's calibration work (supersedes the two earlier
+same-day attempts logged below). `qcar_bridge.py`'s throttle mapping is now
+`duty = THROTTLE_DEADBAND + THROTTLE_GAIN * |speed|` with
+`THROTTLE_DEADBAND = 0.04`, `THROTTLE_GAIN = 0.0667`, fitted from an
+empirical duty sweep (0.05 -> no motion, 0.06-0.061 -> ~0.30-0.33 m/s,
+0.065 -> ~0.39 m/s, 0.085 -> runs away to ~0.85-0.9 m/s - a stick-slip
+signature, not a clean linear range) and validated end-to-end with 2m
+drive-and-stop tests at 4 commanded speeds:
+
+| commanded | measured cruise | ratio |
+|---|---|---|
+| 0.2 m/s | unreliable - moved once, didn't move at all on an earlier nearby duty | - |
+| 0.3 m/s | 0.31 m/s | 1.05 |
+| 0.4 m/s | 0.42 m/s | 1.05 |
+| 0.5 m/s | 0.50 m/s | 1.00 |
+
+0.3-0.5 m/s now tracks commanded speed within ~5%, versus the original
+`1/3` gain's ~2.6-2.7x overshoot. Below ~0.25-0.3 m/s the real vehicle sits
+right at its static-friction deadband and can fail to move at all,
+depending on run-to-run friction noise - not something duty calibration
+can fix, a hard physical limit of this vehicle at this floor condition.
+
+Also cleaned up as part of finalizing this: removed the leftover `[DBG]`
+print statement in `qcar_bridge.py`'s control loop (temporary debug from
+2026-08-12, no longer needed), fixed a latent typo bug in
+`qcar_teleop_twist.py` (`current_steer_angle_angle` was never actually
+read - `current_steer_angle` was the real attribute name used elsewhere in
+the file), and raised the teleop default speed from 0.2 to 0.3 m/s since
+0.2 m/s is now known to sit at the unreliable deadband edge.
+
+**Still open, unaffected by this fix**: the ~2.4-2.55s stop latency /
+coasting behavior after a stop command is commanded is a separate problem
+- extra distance still scales with cruise speed (0.60m at 0.2 m/s up to
+1.20m at 0.5 m/s). See `qcar_updated_stop_distance_investigation` project
+memory for the full sweep/validation data and current status.
+
+## 2026-08-17 - Fixed check_stop_latency.py's cruise-velocity warmup skip
+
+The warmup-skip window for the cruise-phase velocity average was measured
+from script start, not from when the car actually started moving. With the
+real static-friction deadband found this session (motion can be delayed
+~2s after the command is first sent), this silently mixed several seconds
+of near-zero pre-motion samples into the "cruise velocity" average -
+exactly what made the earlier 0.3m@0.25m/s test report an unreliable 0.097
+m/s. Fixed: the warmup timer now starts from the first `/odom` sample where
+`|v| > 0.01`, not from node startup.
+
+## 2026-08-17 - THROTTLE_GAIN replaced with a deadband-compensated mapping
+
+Second calibration attempt, addressing why the first (a flat linear gain
+correction) broke teleop: added `THROTTLE_DEADBAND = 0.085` (duty floor to
+reliably break static friction) alongside a much shallower `THROTTLE_GAIN =
+0.021` (duty per m/s above that floor, from the earlier duty=0.10 -> ~0.8
+m/s clean measurement). `qcar_bridge.py`'s control loop now computes
+`throttle = sign(v) * (THROTTLE_DEADBAND + THROTTLE_GAIN * |v|)` for any
+nonzero commanded speed instead of a flat multiplier. Deployed to the QCar;
+not yet validated on hardware - this is a two-point fit, expect to refine
+after real testing (ideally a longer clean run with `check_stop_latency.py`
+once there's more runway than the current ~2-3m).
+
+## 2026-08-17 - check_stop_latency.py no longer runs forever after its report
+
+Found the hard way: the script's original design kept spinning/publishing
+`linear.x=0.0` indefinitely after printing its report ("still commanding
+zero, safe" was the reasoning). A finished test process was left running in
+the background, and its continuous zero-velocity publishes fought a
+separately-run `qcar_teleop_twist.py` node's commands on the same
+`/cmd_vel` topic - teleop looked like it was "responding but not moving"
+(briefly registering a nonzero command, then getting stomped back to zero
+within one control cycle), which cost real time to diagnose. Fixed: the
+node now sets a `done` flag once its report prints and `main()` exits the
+spin loop right after, so the process exits cleanly instead of lingering.
+
+## 2026-08-17 - THROTTLE_GAIN calibration attempted and reverted same day - deadband found
+
+First real calibration attempt: lowered `THROTTLE_GAIN` from `1/3` to
+`(1/3)/2.67` based on the earlier-measured ~2.67x commanded-vs-real speed
+ratio. Deployed and tested on hardware via `check_stop_latency.py`, which
+surfaced a real static-friction deadband: at the old gain, commanded speeds
+below ~0.25 m/s (~8% duty) produced zero motion, and even 0.25 m/s sat
+motionless for ~2.1s before breaking stiction. Lowering the gain pushes
+normal teleop speeds below that same duty threshold, so teleop stopped
+responding entirely - reverted `THROTTLE_GAIN` back to `1/3` same day to
+restore teleop.
+
+**Conclusion**: the gain and the deadband aren't independent - a linear
+gain correction alone can't fix commanded-vs-real speed without also
+addressing the static-friction dead zone (e.g. a deadband-compensating
+offset added to the throttle command). Next calibration attempt should
+tackle both together. See `qcar_updated_stop_distance_investigation`
+project memory for full context.
+
+## 2026-08-17 - Added check_stop_latency.py, a combined cruise-speed + stop-latency checker
+
+New node `scripts/check_stop_latency.py` (wired into `CMakeLists.txt`, run via
+`ros2 run qcar_updated check_stop_latency.py <target_distance_m> <speed_m_s>
+[stop_threshold_m_s] [debounce_s]`). One drive-to-distance-then-stop test now
+answers two questions at once instead of needing a separate calibration pass:
+
+1. **Cruise velocity**: mean of the real encoder-derived `/odom` velocity
+   during the drive phase (skipping an initial 0.5s warmup for the throttle
+   rate-limiter to settle) - directly gives the commanded-vs-measured speed
+   ratio needed to correct `THROTTLE_GAIN`, printed as a ready-to-use
+   multiplier.
+2. **Stop latency**: exact wall-clock time + distance at the moment the stop
+   is commanded, vs. the moment `/odom` velocity stays below a small
+   threshold for a debounce window (default 0.02 m/s / 0.3s, guards against
+   a single noisy near-zero sample mid-coast) - replaces eyeballing "does it
+   stop the instant the command prints" with precise numbers.
+
+Every `/odom` sample is also logged to a CSV. Built to support the ongoing
+real-hardware stop-distance overshoot investigation (see
+`qcar_updated_stop_distance_investigation` project memory).
+
 ## 2026-08-02 - Investigated "robot deviates mid-curve, corrects by curve end" on a large-reorientation goal - five parameters tested, none fixed it
 
 User reported a specific symptom on a real goal from their own session (`(-0.0005, -2.014, 180deg)`

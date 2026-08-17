@@ -79,7 +79,7 @@
 			{
 				"command" : 4,
 				"file" : 1,
-				"line" : 84,
+				"line" : 85,
 				"parent" : 0
 			},
 			{
@@ -109,7 +109,7 @@
 			{
 				"command" : 9,
 				"file" : 1,
-				"line" : 87,
+				"line" : 88,
 				"parent" : 0
 			},
 			{
@@ -388,7 +388,8 @@
 			"destination" : "lib/qcar_updated",
 			"paths" : 
 			[
-				"scripts/qcar_teleop_twist.py"
+				"scripts/qcar_teleop_twist.py",
+				"scripts/qcar_relay_node.py"
 			],
 			"type" : "file"
 		},

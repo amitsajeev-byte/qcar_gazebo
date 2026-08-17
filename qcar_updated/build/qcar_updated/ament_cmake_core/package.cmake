@@ -5,7 +5,7 @@ set(qcar_updated_BUILD_DEPENDS "xacro" "robot_state_publisher" "nav2_mppi_contro
 set(qcar_updated_BUILDTOOL_DEPENDS "ament_cmake")
 set(qcar_updated_BUILD_EXPORT_DEPENDS "xacro" "robot_state_publisher" "nav2_mppi_controller" "nav2_costmap_2d" "rclcpp" "rclcpp_lifecycle" "pluginlib" "xtensor" "xsimd")
 set(qcar_updated_BUILDTOOL_EXPORT_DEPENDS )
-set(qcar_updated_EXEC_DEPENDS "rclpy" "geometry_msgs" "joint_state_publisher" "gazebo_ros" "gazebo_plugins" "nav2_bringup" "nav2_common" "nav2_smac_planner" "cartographer_ros" "rviz2" "xacro" "robot_state_publisher" "nav2_mppi_controller" "nav2_costmap_2d" "rclcpp" "rclcpp_lifecycle" "pluginlib" "xtensor" "xsimd")
+set(qcar_updated_EXEC_DEPENDS "rclpy" "geometry_msgs" "joint_state_publisher" "gazebo_ros" "gazebo_plugins" "nav2_bringup" "nav2_common" "nav2_smac_planner" "cartographer_ros" "rviz2" "sensor_msgs" "nav_msgs" "tf2_ros" "nav2_map_server" "xacro" "robot_state_publisher" "nav2_mppi_controller" "nav2_costmap_2d" "rclcpp" "rclcpp_lifecycle" "pluginlib" "xtensor" "xsimd")
 set(qcar_updated_TEST_DEPENDS "ament_lint_auto" "ament_lint_common")
 set(qcar_updated_GROUP_DEPENDS )
 set(qcar_updated_MEMBER_OF_GROUPS )

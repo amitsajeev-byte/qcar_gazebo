@@ -5,6 +5,7 @@
 /home/amit/humble_ws/src/qcar_updated/install/qcar_updated/share/qcar_updated/urdf/qcar_model.xacro
 /home/amit/humble_ws/src/qcar_updated/install/qcar_updated/share/qcar_updated/launch/qcar_slam.launch.py
 /home/amit/humble_ws/src/qcar_updated/install/qcar_updated/share/qcar_updated/launch/qcar_updated.launch.py
+/home/amit/humble_ws/src/qcar_updated/install/qcar_updated/share/qcar_updated/launch/qcar_visualize.launch.py
 /home/amit/humble_ws/src/qcar_updated/install/qcar_updated/share/qcar_updated/launch/qcar_nav2.launch.py
 /home/amit/humble_ws/src/qcar_updated/install/qcar_updated/share/qcar_updated/launch/__pycache__/qcar_nav2.launch.cpython-310.pyc
 /home/amit/humble_ws/src/qcar_updated/install/qcar_updated/share/qcar_updated/launch/__pycache__/qcar_updated.launch.cpython-310.pyc
@@ -25,9 +26,9 @@
 /home/amit/humble_ws/src/qcar_updated/install/qcar_updated/share/qcar_updated/config/nav2/nav2_params.yaml
 /home/amit/humble_ws/src/qcar_updated/install/qcar_updated/share/qcar_updated/rviz/qcar.rviz
 /home/amit/humble_ws/src/qcar_updated/install/qcar_updated/share/qcar_updated/scripts/qcar_teleop_twist.py
-/home/amit/humble_ws/src/qcar_updated/install/qcar_updated/share/qcar_updated/maps/qcar_map.pgm
-/home/amit/humble_ws/src/qcar_updated/install/qcar_updated/share/qcar_updated/maps/qcar_map.yaml
+/home/amit/humble_ws/src/qcar_updated/install/qcar_updated/share/qcar_updated/scripts/qcar_relay_node.py
 /home/amit/humble_ws/src/qcar_updated/install/qcar_updated/lib/qcar_updated/qcar_teleop_twist.py
+/home/amit/humble_ws/src/qcar_updated/install/qcar_updated/lib/qcar_updated/qcar_relay_node.py
 /home/amit/humble_ws/src/qcar_updated/install/qcar_updated/share/qcar_updated/environment/library_path.sh
 /home/amit/humble_ws/src/qcar_updated/install/qcar_updated/share/qcar_updated/environment/library_path.dsv
 /home/amit/humble_ws/src/qcar_updated/install/qcar_updated/share/ament_index/resource_index/package_run_dependencies/qcar_updated

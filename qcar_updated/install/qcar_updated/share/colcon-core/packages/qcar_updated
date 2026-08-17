@@ -1,1 +1,1 @@
-cartographer_ros:gazebo_plugins:gazebo_ros:geometry_msgs:joint_state_publisher:nav2_bringup:nav2_common:nav2_costmap_2d:nav2_mppi_controller:nav2_smac_planner:pluginlib:rclcpp:rclcpp_lifecycle:rclpy:robot_state_publisher:rviz2:xacro:xsimd:xtensor
+cartographer_ros:gazebo_plugins:gazebo_ros:geometry_msgs:joint_state_publisher:nav2_bringup:nav2_common:nav2_costmap_2d:nav2_map_server:nav2_mppi_controller:nav2_smac_planner:nav_msgs:pluginlib:rclcpp:rclcpp_lifecycle:rclpy:robot_state_publisher:rviz2:sensor_msgs:tf2_ros:xacro:xsimd:xtensor

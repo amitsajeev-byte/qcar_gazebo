@@ -77,6 +77,8 @@ install(DIRECTORY urdf launch worlds models config rviz scripts maps
 
 install(PROGRAMS
   scripts/qcar_teleop_twist.py
+  scripts/qcar_relay_node.py
+  scripts/check_stop_latency.py
   DESTINATION lib/${PROJECT_NAME}
 )
 

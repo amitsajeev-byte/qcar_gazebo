@@ -87,7 +87,10 @@ if("x${CMAKE_INSTALL_COMPONENT}x" STREQUAL "xUnspecifiedx" OR NOT CMAKE_INSTALL_
 endif()
 
 if("x${CMAKE_INSTALL_COMPONENT}x" STREQUAL "xUnspecifiedx" OR NOT CMAKE_INSTALL_COMPONENT)
-  file(INSTALL DESTINATION "${CMAKE_INSTALL_PREFIX}/lib/qcar_updated" TYPE PROGRAM FILES "/home/amit/humble_ws/src/qcar_updated/scripts/qcar_teleop_twist.py")
+  file(INSTALL DESTINATION "${CMAKE_INSTALL_PREFIX}/lib/qcar_updated" TYPE PROGRAM FILES
+    "/home/amit/humble_ws/src/qcar_updated/scripts/qcar_teleop_twist.py"
+    "/home/amit/humble_ws/src/qcar_updated/scripts/qcar_relay_node.py"
+    )
 endif()
 
 if("x${CMAKE_INSTALL_COMPONENT}x" STREQUAL "xUnspecifiedx" OR NOT CMAKE_INSTALL_COMPONENT)

@@ -38,10 +38,12 @@ class QCarTwistTeleop(Node):
             Twist, '/cmd_vel', 10
         )
 
-        self.speed = 0.2  # m/s
+        self.speed = 0.3  # m/s - below ~0.25-0.3 m/s the real vehicle may not
+        # move at all (static-friction deadband, calibrated 2026-08-17 - see
+        # qcar_bridge.py's THROTTLE_GAIN comment)
         self.steer_angle = 0.4  # desired steering angle, radians
         self.current_drive = 0.0
-        self.current_steer_angle_angle = 0.0
+        self.current_steer_angle = 0.0
 
         print(MSG)
         print(f'Current speed: {self.speed:.2f} m/s')
