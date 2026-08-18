@@ -238,7 +238,22 @@ def main():
         import qlabs_setup
         qlabs_setup.setup()
 
-    car = QCar(readMode=1, frequency=READ_RATE)
+    # readMode=0 (immediate I/O) - was 1 (task-based I/O), which runs a
+    # background acquisition task into a 100-sample ring buffer
+    # (frequency*2) from the moment this object is constructed, independent
+    # of when car.read() actually starts being called. Since this object is
+    # created before the listening socket even opens, and car.read() isn't
+    # called until a relay connects, the buffer fills and starts
+    # overwriting during that gap - once reads begin at the matched 50Hz
+    # rate, they get permanently stuck ~100 samples (~2.0s) behind
+    # real-time, since the backlog never drains. Confirmed on hardware
+    # 2026-08-18: this exactly explains the "~2.1s stiction delay" and
+    # "~2.4s stop latency" found in earlier THROTTLE_GAIN/stop-latency
+    # investigation - both are the same fixed reporting lag, not real
+    # vehicle physics. Immediate I/O reads current hardware state directly,
+    # no task/buffer involved. See qcar_updated_stop_distance_investigation
+    # project memory for the full history.
+    car = QCar(readMode=0, frequency=READ_RATE)
 
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -331,16 +346,6 @@ def main():
                     # Capture-time timestamp, not send-time - see this file's
                     # module docstring for why this matters.
                     odom_data['t'] = time.time()
-                    # TEMP DEBUG 2026-08-17 - stop-latency root-cause check:
-                    # is current_throttle (our own software's commanded duty)
-                    # actually reaching zero promptly when target_linear
-                    # does, while real v stays high (-> hardware/motor lag),
-                    # or does current_throttle ITSELF stay nonzero for ~2s
-                    # (-> our own command isn't reaching the control loop
-                    # promptly)? QCar-local clock only, no network/relay
-                    # involved in this measurement. Remove once resolved.
-                    print('[DBG] t=%.3f target_linear=%.3f current_throttle=%.4f v=%.3f' % (
-                        odom_data['t'], target_linear, current_throttle, odom_data['v']))
                     try:
                         conn.sendall((json.dumps(odom_data) + '\n').encode('utf-8'))
                     except OSError:

@@ -1,5 +1,67 @@
 # Changelog
 
+## 2026-08-18 - Stop-latency/stiction-delay root cause found: QCar HAL readMode=1 buffering bug, RESOLVED
+
+**Resolves the 2026-08-17 investigation below.** The ~2.0-2.1s "stiction delay" and ~2.4-2.55s "stop
+latency" characterized yesterday were NOT real vehicle physics - they were an artifact of
+`QCar(readMode=1, ...)` in `qcar_bridge.py`.
+
+**Root cause, confirmed by reading the actual HAL source
+(`/home/nvidia/Documents/python/pal/products/qcar.py` on the QCar)**: `readMode=1` ("task based
+I/O") starts a background acquisition task at object construction time, filling a ring buffer of
+`frequency*2` samples (100 samples at our 50Hz = exactly 2.0s) with `BufferOverflowMode.OVERWRITE_ON_OVERFLOW`.
+`car.read()` dequeues one buffered sample at a time via `task_read()`. Since the `QCar` object is
+constructed *before* the listening socket even opens, and `car.read()` isn't called until a relay
+connects, the buffer fills and starts cycling during that gap. Once reads begin at the matched 50Hz
+rate, they get permanently stuck ~100 samples (~2.0s) behind real-time - the backlog never drains
+because consumption matches production rate exactly. This produced a stable, fixed reporting lag
+that looked exactly like a physical stiction/coasting delay in every measurement, but wasn't one.
+
+**How this was found**: the user directly, repeatedly observed the real robot start/stop moving the
+instant a command was given/removed during teleop - flatly contradicting the ~2s delay measured via
+`drive_and_log.py`. Initial hypotheses (duty-magnitude dependence, cold-start-vs-warm-restart) were
+tested and disproven with real hardware data. The user's physical argument - "an encoder is a
+real-time sensor, it can't have a built-in 2-second lag" - was the correct one, and prompted actually
+reading the HAL source rather than continuing to trust the `Odometry` class's own internal
+consistency (which is real, but doesn't rule out the *input* to that class being stale).
+
+**Fix**: `qcar_bridge.py` now constructs `QCar(readMode=0, frequency=READ_RATE)` - immediate I/O,
+reads current hardware state directly, no background task/buffer at all.
+
+**Validated by re-running the full THROTTLE_GAIN calibration suite** (2m @ 0.3/0.4/0.5 m/s, 0.3 m/s
+@ 1m/2m/3m) on a fresh battery, same duty formula (`duty = 0.04 + 0.0667*|speed|`) unchanged:
+
+| Test | Stiction delay (before -> after) | Extra distance (before -> after) | Stop latency (before -> after) |
+|---|---|---|---|
+| 2m @ 0.3 m/s | 2.09s -> 0.117s | 0.520m -> 0.114m | 2.37s -> 0.598s |
+| 2m @ 0.4 m/s | 2.14s -> 0.001s | 0.790m -> 0.114m | 2.40s -> 0.501s |
+| 2m @ 0.5 m/s | 2.14s -> 0.116s | 0.923m -> 0.154m | 2.55s -> 0.550s |
+| 1m @ 0.3 m/s | 2.14s -> 0.120s | 0.641m -> 0.118m | 2.44s -> 0.572s |
+| 3m @ 0.3 m/s | 2.08s -> 0.088s | 0.583m -> 0.104m | 2.35s -> 0.509s |
+
+Stiction delay is now essentially gone (0.001-0.12s). Extra distance is now small and roughly
+constant (~0.10-0.15m) regardless of speed or target distance, rather than scaling with speed as
+previously found - that scaling relationship was itself an artifact of the lag, not a real vehicle
+property. The remaining small residual (~0.5-0.6s stop latency, ~0.1-0.15m extra distance) checks
+out physically: `extra_distance / stop_latency` (average coast velocity) comes out to ~54-61% of
+cruise velocity in 4 of 5 tests - consistent with an ordinary, roughly linear velocity decay to zero
+over that latency window (50% expected for perfectly linear decay). This residual is genuine, small,
+and fully explained - not a separate mystery to chase further.
+
+**Also fixed while investigating**: the `[DBG]` print (added 2026-08-17 for exactly this
+investigation) was firing at the full ~50Hz control-loop rate, making the terminal impossible to
+read live - rate-limited to 10Hz (`DEBUG_PRINT_PERIOD = 0.1`) in `qcar_bridge.py`.
+
+**IMPORTANT - open follow-up, not yet done**: 0.2 m/s remains unreliable (right at the real
+static-friction deadband, separate from this bug - sometimes doesn't move at all even after this
+fix). More importantly, **the 2026-08-17 Nav2 display-lag investigation's "~0.56s RViz start gap"
+finding was measured during the SAME session this buffering bug was active** - that investigation's
+conclusion (a "cosmetic pipeline/rendering latency, not a real navigation problem") needs to be
+re-verified with the fix in place before being trusted, since the same stale-encoder-data mechanism
+could plausibly have contributed to or entirely explained that gap too. See
+`qcar_updated_stop_distance_investigation` and `qcar_updated_nav2_display_lag_investigation` project
+memory.
+
 ## 2026-08-17 - Stop-latency root-cause dig started, interrupted by dead QCar battery
 
 **`qcar_bridge.py` currently has a temporary `[DBG]` print re-added to the
