@@ -1,5 +1,13 @@
 # qcar_hardware
 
+> **As of 2026-08-10, active real-hardware development moved to `../qcar_updated/`** (the bridge
+> below was ported in, and has since been extended - throttle calibration, a fixed HAL buffering
+> bug, real-hardware Nav2 confirmed working). This package is no longer the live target; it's kept
+> as reference material (this architecture writeup, `hardware_integration_reference.md`, the
+> Quanser HAL/PAL docs). The two packages may have diverged since the port - don't assume a fix
+> made in one is present in the other. See `qcar_updated/README.md`'s "Real hardware" section for
+> the current setup.
+
 Target home for the full real-hardware QCar stack (teleop → SLAM → Nav2),
 migrated incrementally from `qcar_updated` (the Gazebo-based end-to-end
 simulation reference). This is the basic architecture for the project going
