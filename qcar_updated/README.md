@@ -52,6 +52,9 @@ source install/setup.bash
 | `scripts/qcar_teleop_twist.py` | Keyboard teleop publishing `/cmd_vel` |
 | `worlds/*.world` | Gazebo worlds (`myworld.world` is used by default; others available for manual swap) |
 | `TUNING.md` | Navigation accuracy tuning reference (physics, MPPI controller, AMCL, costmap parameters) |
+| `qcar_onboard/qcar_bridge.py`, `qcar_lidar_node.py` | Real-hardware onboard bridge - runs directly on the QCar (no ROS2), see "Real hardware" below |
+| `scripts/qcar_relay_node.py` | Dev-PC side of the real-hardware bridge - the only real-hardware script that speaks ROS2 |
+| `scripts/drive_and_log.py`, `check_stop_latency.py`, `monitor_goal_timing.py` | Real-hardware diagnostic/calibration tools - see "Real hardware" below |
 
 ## Quick start: simulation only
 
@@ -137,6 +140,63 @@ plugin's `publish_odom_tf` is hardcoded `true`. See Troubleshooting below.
 
 You can also drive manually at any time with `ros2 run qcar_updated qcar_teleop_twist.py`
 (publishes to `/cmd_vel`, same as Nav2's controller output).
+
+## Real hardware
+
+This package also drives the physical QCar - use `launch_sim:=false` on `qcar_slam.launch.py` /
+`qcar_nav2.launch.py` to skip Gazebo and talk to the real robot instead. The physical QCar's
+onboard compute runs ROS 2 Dashing (Ubuntu 18.04), not Humble, and native ROS2 pub/sub between
+the two doesn't interoperate - confirmed directly on hardware (raw UDP passes both directions,
+but Fast-RTPS discovery itself never completes, a protocol-version issue). So instead of running
+this package's stack on the QCar, a plain TCP/JSON bridge connects the two:
+
+```
+qcar_teleop_twist.py / Nav2's controller  (dev PC, ROS2, this package)
+        |  /cmd_vel
+        v
+qcar_relay_node.py  (dev PC, ROS2 - the only real-hardware script that speaks ROS2)
+        |  newline-delimited JSON over TCP (ports 5555 motor, 5556 lidar)
+        v
+qcar_bridge.py / qcar_lidar_node.py  (QCar onboard, plain Python, no ROS2 at all)
+        |  Quanser HAL
+        v
+real motor / steering / encoder / lidar
+```
+
+Bring-up (see `../qcar_hardware/commands.md` for the full copy-pasteable command reference):
+
+```bash
+# on the QCar (two terminals):
+sudo -E env PYTHONPATH=/home/nvidia/Documents/python python3 ~/ros2_amit/src/onboard_bridge/qcar_bridge.py
+PYTHONPATH=/home/nvidia/Documents/python python3 ~/ros2_amit/src/onboard_bridge/qcar_lidar_node.py
+
+# on the dev PC:
+ros2 run qcar_updated qcar_relay_node.py --ros-args -p qcar_ip:=<qcar-ip> -p qcar_clock_offset:=<measured-offset>
+ros2 launch qcar_updated qcar_nav2.launch.py launch_sim:=false
+```
+
+`qcar_clock_offset` corrects for the QCar's and dev PC's independent, unsynchronized clocks -
+measure it fresh each session (procedure in `qcar_relay_node.py`'s module docstring), since it
+drifts. The QCar's IP is DHCP-assigned and also changes per session.
+
+**Throttle calibration**: `cmd_vel`'s `linear.x` (m/s) has no documented conversion to the HAL's
+PWM duty-cycle throttle. `qcar_bridge.py` maps it as
+`duty = THROTTLE_DEADBAND + THROTTLE_GAIN * |speed|` (currently `0.04 + 0.0667 * |speed|`),
+calibrated and validated on hardware to track commanded speed within ~5% for 0.3-0.5 m/s. Below
+~0.25-0.3 m/s the vehicle sits at a real static-friction deadband and can fail to move at all -
+a hard physical limit, not a tuning gap. See that file's `THROTTLE_GAIN` comment and the
+`qcar_updated_stop_distance_investigation` history for the full calibration data if it ever needs
+redoing (friction can drift noticeably session to session).
+
+**Diagnostic tools** (all installed via `ros2 run qcar_updated <script>.py`):
+- `drive_and_log.py <target_distance_m> <speed_m_s>` - drives to a target distance, logs
+  `/odom` distance/velocity to a CSV, exits automatically. The simplest tool, used for most
+  calibration sweeps.
+- `check_stop_latency.py <target_distance_m> <speed_m_s>` - same idea, plus reports cruise
+  velocity and stop-latency numbers directly instead of needing separate CSV analysis.
+- `monitor_goal_timing.py` - instruments a single Nav2 goal end to end (goal-sent, real motion
+  start/stop from `/odom`, RViz-displayed start/stop from the `map->base` TF, goal-reached) with
+  precise timestamps - built for diagnosing display-lag/timing questions during Nav2 goals.
 
 ### Custom MPPI critic: `EarlyCommitCritic`
 
@@ -264,15 +324,20 @@ navigation-accuracy parameter reference.
 
 ## Relation to `qcar_hardware`
 
-This package is simulation-only (Gazebo classic). The sibling `qcar_hardware` package
-(`../qcar_hardware/`) covers bring-up on the physical QCar 2 - Quanser HAL/PAL reference material,
-hardware-test scripts, and `hardware_integration_reference.md` documenting the actual sensor/motor
-API. The physical QCar's onboard compute runs ROS 2 Dashing on Ubuntu 18.04, not Humble, so this
+As of 2026-08-10, active real-hardware development happens in *this* package (see "Real hardware"
+above) - the bridge was ported in from the sibling `qcar_hardware` package
+(`../qcar_hardware/`), which is no longer the live target but still holds the original Quanser
+HAL/PAL reference material, hardware-test scripts, and `hardware_integration_reference.md`
+documenting the sensor/motor API in more depth than this README does. The two packages may have
+diverged since the port - don't assume a fix made in one is present in the other.
+
+The physical QCar's onboard compute runs ROS 2 Dashing on Ubuntu 18.04, not Humble, so this
 package's Nav2/MPPI stack (including the custom critic above) cannot run natively on it and keeps
-running here, on the dev PC. `qcar_hardware` instead adds a small native bridge on the QCar itself
-(`qcar_hw_bridge.py` / `qcar_lidar_bridge.py`) that subscribes to `/cmd_vel` from this stack over
-the network and publishes real `/odom`/`/imu`/`/scan` back - a Humble Docker container on the QCar
-was the original plan but was dropped for storage reasons (32GB eMMC, already shared with the
-onboard Dashing/Melodic installs). Not yet verified end-to-end on hardware; see `qcar_hardware`'s
-reference doc for the architecture, the open Dashing↔Humble wire-compatibility risk, and what still
-needs calibrating (throttle-to-speed gain in particular).
+running here, on the dev PC. A Humble Docker container on the QCar was considered early on but
+dropped once a deeper cause was found: native ROS2 pub/sub between Dashing and Humble doesn't
+interoperate at all (Fast-RTPS discovery never completes, a protocol-version issue, confirmed
+directly on hardware) - not a storage constraint, so Docker wouldn't have fixed it either. The TCP
+bridge in "Real hardware" above is the result. Real-hardware Nav2 has been run end-to-end
+successfully multiple times, and the throttle-to-speed calibration is done (see "Real hardware"
+above) - the one still-open item is a real, characterized static-friction deadband below ~0.25-0.3
+m/s, which is a hard physical limit of the vehicle rather than something left to calibrate.
