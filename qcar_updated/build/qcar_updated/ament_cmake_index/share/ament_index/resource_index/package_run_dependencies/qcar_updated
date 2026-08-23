@@ -1,1 +1,0 @@
-xacro;robot_state_publisher;nav2_mppi_controller;nav2_costmap_2d;rclcpp;rclcpp_lifecycle;pluginlib;xtensor;xsimd;rclpy;geometry_msgs;joint_state_publisher;gazebo_ros;gazebo_plugins;nav2_bringup;nav2_common;nav2_smac_planner;cartographer_ros;rviz2;sensor_msgs;nav_msgs;tf2_ros;nav2_map_server;ament_lint_auto;ament_lint_common
