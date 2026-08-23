@@ -183,37 +183,36 @@ class QCarRelayNode(Node):
     def _publish_odom(self, line):
         try:
             data = json.loads(line)
-        except ValueError:
+            stamp = qcar_time_to_stamp(data['t'], self.qcar_clock_offset)
+            qx, qy, qz, qw = yaw_to_quaternion(data['yaw'])
+
+            odom = Odometry()
+            odom.header.stamp = stamp
+            odom.header.frame_id = self.odom_frame
+            odom.child_frame_id = self.base_frame
+            odom.pose.pose.position.x = data['x']
+            odom.pose.pose.position.y = data['y']
+            odom.pose.pose.orientation.x = qx
+            odom.pose.pose.orientation.y = qy
+            odom.pose.pose.orientation.z = qz
+            odom.pose.pose.orientation.w = qw
+            odom.twist.twist.linear.x = data['v']
+            odom.twist.twist.angular.z = data['yaw_rate']
+            self.odom_pub.publish(odom)
+
+            tf = TransformStamped()
+            tf.header.stamp = stamp
+            tf.header.frame_id = self.odom_frame
+            tf.child_frame_id = self.base_frame
+            tf.transform.translation.x = data['x']
+            tf.transform.translation.y = data['y']
+            tf.transform.rotation.x = qx
+            tf.transform.rotation.y = qy
+            tf.transform.rotation.z = qz
+            tf.transform.rotation.w = qw
+            self.tf_broadcaster.sendTransform(tf)
+        except (ValueError, KeyError, TypeError):
             return
-
-        stamp = qcar_time_to_stamp(data['t'], self.qcar_clock_offset)
-        qx, qy, qz, qw = yaw_to_quaternion(data['yaw'])
-
-        odom = Odometry()
-        odom.header.stamp = stamp
-        odom.header.frame_id = self.odom_frame
-        odom.child_frame_id = self.base_frame
-        odom.pose.pose.position.x = data['x']
-        odom.pose.pose.position.y = data['y']
-        odom.pose.pose.orientation.x = qx
-        odom.pose.pose.orientation.y = qy
-        odom.pose.pose.orientation.z = qz
-        odom.pose.pose.orientation.w = qw
-        odom.twist.twist.linear.x = data['v']
-        odom.twist.twist.angular.z = data['yaw_rate']
-        self.odom_pub.publish(odom)
-
-        tf = TransformStamped()
-        tf.header.stamp = stamp
-        tf.header.frame_id = self.odom_frame
-        tf.child_frame_id = self.base_frame
-        tf.transform.translation.x = data['x']
-        tf.transform.translation.y = data['y']
-        tf.transform.rotation.x = qx
-        tf.transform.rotation.y = qy
-        tf.transform.rotation.z = qz
-        tf.transform.rotation.w = qw
-        self.tf_broadcaster.sendTransform(tf)
 
     # --- QCar LiDAR bridge -> /scan ---
 
@@ -245,18 +244,18 @@ class QCarRelayNode(Node):
     def _publish_scan(self, line):
         try:
             data = json.loads(line)
-        except ValueError:
+            scan = LaserScan()
+            scan.header.stamp = qcar_time_to_stamp(data['t'], self.qcar_clock_offset)
+            scan.header.frame_id = self.frame_id
+            scan.angle_min = data['angle_min']
+            scan.angle_max = data['angle_max']
+            scan.angle_increment = data['angle_increment']
+            scan.range_min = data['range_min']
+            scan.range_max = data['range_max']
+            scan.ranges = [float(r) for r in data['ranges']]
+            self.scan_pub.publish(scan)
+        except (ValueError, KeyError, TypeError):
             return
-        scan = LaserScan()
-        scan.header.stamp = qcar_time_to_stamp(data['t'], self.qcar_clock_offset)
-        scan.header.frame_id = self.frame_id
-        scan.angle_min = data['angle_min']
-        scan.angle_max = data['angle_max']
-        scan.angle_increment = data['angle_increment']
-        scan.range_min = data['range_min']
-        scan.range_max = data['range_max']
-        scan.ranges = [float(r) for r in data['ranges']]
-        self.scan_pub.publish(scan)
 
     def destroy_node(self):
         self._stop = True

@@ -108,12 +108,55 @@ THROTTLE_RATE_LIMIT = 1.0  # duty-cycle fraction per second
 
 # cmd_vel's linear.x is m/s; the HAL's throttle is a PWM duty-cycle fraction
 # (unitless) - there's no documented conversion between the two anywhere in
-# the Quanser manuals. This is an UNCALIBRATED starting guess (1/3.0, from
-# the documented 3 m/s rated max speed in
-# documents/user_manual_customizing_the_qcar.pdf), not a tuned value -
-# calibrate against real encoder-measured speed before trusting closed-loop
-# velocity control. See hardware_integration_reference.md.
-THROTTLE_GAIN = 1.0 / 3.0
+# the Quanser manuals. The original guess (a flat THROTTLE_GAIN=1/3.0
+# multiplier) was never calibrated and made real speed run ~2.6-2.7x
+# commanded (0.3 m/s command -> ~0.8 m/s real). A naive linear correction
+# (just dividing that gain down) was tried and reverted the same day: it
+# pushed normal teleop speeds below the vehicle's static-friction deadband,
+# so the car stopped responding to teleop entirely.
+#
+# Root cause: not a single linear relationship. There's a real stiction
+# floor below which NO commanded speed produces motion at all, and once
+# past it the real speed is very sensitive to small duty changes (a
+# stick-slip signature - static friction exceeds kinetic friction, so the
+# instant the car breaks free, the same duty suddenly has much more net
+# force to accelerate with). Calibrated on hardware 2026-08-17, car on the
+# ground with real load, by empirically sweeping fixed duty values and
+# separately validating a fitted formula against 4 different commanded
+# speeds end to end (2m drive-and-stop test each):
+#   commanded  ->  measured real cruise speed
+#   0.2 m/s        0.24-0.99x reliable - right at the stiction edge, can
+#                  fail to move at all depending on run-to-run friction
+#                  noise. Treat anything below ~0.25-0.3 m/s as unreliable.
+#   0.3 m/s        0.31 m/s (ratio 1.05)
+#   0.4 m/s        0.42 m/s (ratio 1.05)
+#   0.5 m/s        0.50 m/s (ratio 1.00)
+# THROTTLE_DEADBAND/THROTTLE_GAIN below implement
+# duty = THROTTLE_DEADBAND + THROTTLE_GAIN * |speed|, fitted and validated
+# for the 0.3-0.5 m/s range above. Not validated above 0.5 m/s - re-check
+# with scripts/drive_and_log.py or scripts/check_stop_latency.py before
+# trusting a higher command. See qcar_updated_stop_distance_investigation
+# project memory for the full sweep/validation data.
+THROTTLE_DEADBAND = 0.04
+THROTTLE_GAIN = 0.0667
+
+# Tried active braking (brief reverse-throttle pulse proportional to
+# residual speed when a stop is commanded) to counter drivetrain coast -
+# REJECTED, not just untuned. It's a proportional loop on velocity sign
+# with no deadband and one-cycle-stale (~20ms) feedback: if the pulse
+# overshoots past zero into real reverse motion, the next cycle reads a
+# negative v and "corrects" with a forward push, which can itself
+# overshoot - a genuine undamped hunting oscillation, not a bad gain
+# value. Confirmed on hardware 2026-08-12 (twice - it was reverted once
+# already before this comment, then re-tried and reproduced the same
+# result): car visibly lurched forward/back repeatedly and fast, had to
+# be killed manually. Do not re-add this without a real
+# deadband/hysteresis or a one-shot (non-continuous) brake pulse design -
+# retuning BRAKE_GAIN alone will not fix it. The car coasting for a fairly
+# fixed ~2.4-2.55s after a stop command (0.60-1.20m extra travel across
+# 0.2-0.5 m/s cruise, scaling with speed - see THROTTLE_GAIN comment above
+# for the validated numbers) is the accepted, safe behavior for now - a
+# separate, still-open problem from throttle gain calibration.
 
 # If no command arrives for this long (or the socket disconnects), stop the
 # car. Protects against a dropped WiFi link or a crashed dev-PC relay.
@@ -195,7 +238,22 @@ def main():
         import qlabs_setup
         qlabs_setup.setup()
 
-    car = QCar(readMode=1, frequency=READ_RATE)
+    # readMode=0 (immediate I/O) - was 1 (task-based I/O), which runs a
+    # background acquisition task into a 100-sample ring buffer
+    # (frequency*2) from the moment this object is constructed, independent
+    # of when car.read() actually starts being called. Since this object is
+    # created before the listening socket even opens, and car.read() isn't
+    # called until a relay connects, the buffer fills and starts
+    # overwriting during that gap - once reads begin at the matched 50Hz
+    # rate, they get permanently stuck ~100 samples (~2.0s) behind
+    # real-time, since the backlog never drains. Confirmed on hardware
+    # 2026-08-18: this exactly explains the "~2.1s stiction delay" and
+    # "~2.4s stop latency" found in earlier THROTTLE_GAIN/stop-latency
+    # investigation - both are the same fixed reporting lag, not real
+    # vehicle physics. Immediate I/O reads current hardware state directly,
+    # no task/buffer involved. See qcar_updated_stop_distance_investigation
+    # project memory for the full history.
+    car = QCar(readMode=0, frequency=READ_RATE)
 
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -239,7 +297,7 @@ def main():
                                 angular_z = float(cmd['angular_z'])
                                 target_steering = compute_steering(target_linear, angular_z)
                                 last_cmd_time = time.time()
-                            except (ValueError, KeyError):
+                            except (ValueError, KeyError, TypeError):
                                 print('bad command line, ignoring:', line)
                     except socket.timeout:
                         pass  # no new data this cycle - fall through to control loop
@@ -259,7 +317,11 @@ def main():
                         target_linear = 0.0
                         target_steering = 0.0
 
-                    desired_throttle = target_linear * THROTTLE_GAIN
+                    if abs(target_linear) < 1e-3:
+                        desired_throttle = 0.0
+                    else:
+                        desired_throttle = math.copysign(
+                            THROTTLE_DEADBAND + THROTTLE_GAIN * abs(target_linear), target_linear)
                     desired_throttle = max(-THROTTLE_LIMIT, min(THROTTLE_LIMIT, desired_throttle))
                     max_step = THROTTLE_RATE_LIMIT * dt
                     delta = max(-max_step, min(max_step, desired_throttle - current_throttle))
