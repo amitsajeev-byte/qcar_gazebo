@@ -23,6 +23,16 @@ stamp - see qcar_bridge.py's module docstring for why (confirmed on
 hardware 2026-08-06: receipt-time stamping on two independently-latent TCP
 connections caused AMCL to pair scans with stale poses, producing a
 coherent rigid offset between the live scan and the map).
+
+Note on sudo: documents/user_manual_troubleshooting.pdf ("LIDAR not
+detected") states a 'sudo' flag must be used when executing Python/ROS
+applications with the LIDAR - but this project's commands.md documents
+running this specific script WITHOUT sudo (unlike qcar_bridge.py, which
+does need it for hardware access). Both are apparently true in practice on
+this unit (this script has run fine unprivileged), so treat this as a
+real discrepancy worth rechecking only if this script ever fails to open
+the LIDAR device with a permissions-looking error - try sudo first before
+assuming a wiring/connector fault per that troubleshooting section.
 '''
 import json
 import math

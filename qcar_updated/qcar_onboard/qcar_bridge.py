@@ -75,30 +75,73 @@ WHEELBASE = 0.25725
 # from the vehicle's physical max steering angle (0.5236 rad / 30 deg).
 MAX_STEER_CMD = 0.5
 
-# Compensates for this vehicle's steering mechanical center being offset
-# from steering=0.0 (wheels sit visibly left of straight when commanded to
-# 0 - confirmed on hardware 2026-08-03/06). No adjustable physical linkage
-# is available on this chassis, so corrected in software instead.
+# Compensates for two independent, real effects: (1) this vehicle's
+# steering mechanical center being offset from steering=0.0 (wheels sit
+# visibly left of straight when commanded to 0), and (2) a real steering
+# GAIN error - the physical wheel turns more than the commanded angle for
+# any nonzero command, not just a zero-point offset. No adjustable
+# physical linkage is available on this chassis and no factory steering
+# calibration curve is documented anywhere in the Quanser manuals (only
+# the raw servo command range, -0.5 to 0.5 rad, and the physical max wheel
+# angle, +/-0.5236 rad - checked user_manual_system_hardware.pdf and the
+# QCar HAL source directly; the HAL's own steeringBias parameter is left
+# at its default 0 in this file's QCar() construction, so nothing at the
+# firmware level is fighting this software correction), so both are
+# corrected in software instead, calibrated empirically like
+# THROTTLE_GAIN/THROTTLE_DEADBAND below.
 #
-# Calibrated iteratively on hardware, 2026-08-06, first via an interactive
-# static test (motor off, held candidate angles, visually judged against
-# straight - -0.05 too left, -0.09 "almost correct"), then refined via a
-# sequence of real straight-line driving tests (drive N meters at
-# angular.z=0, measure actual lateral offset). Distance-based measurement
-# is far more precise than eyeballing a stationary wheel angle - prefer it
-# for any further refinement. History (some noise expected - offset also
-# depends on how precisely the vehicle was aimed at the start of each
-# test, not purely the trim value):
-#   trim     distance   offset        direction needed
-#   -0.09     4.5m      0.1m right    less negative (toward 0)
-#   -0.0678   ?         drifted left  more negative (overshot the above)
-#   -0.085    5.3m      0.2m right    less negative
-#   -0.08     ~4.4m      no visible drift reported - ACCEPTED
-# Accepted as "almost accurate" (user's call, 2026-08-06), not a perfect
-# zero - if drift reappears or matters more for a future use case (e.g.
-# tighter Nav2 tolerances), re-run the driving-test procedure above rather
-# than adjusting from static/visual judgment alone.
-STEERING_TRIM = -0.08
+# 2026-08-06: STEERING_TRIM alone (no gain term) iteratively calibrated -
+# first an interactive static test (motor off, held candidate angles,
+# visually judged against straight), then refined via real straight-line
+# driving tests (drive N meters at angular.z=0, measure actual lateral
+# offset). -0.08 accepted that day as "almost accurate", no gain term
+# considered/tested yet.
+#
+# 2026-08-24/25: revisited after the vehicle appeared to turn less
+# accurately on hardware than in sim. -0.08 no longer held (drift had
+# grown to ~18cm over just 1m, not the ~cm-level residual expected) -
+# initial re-investigation was badly confounded by a nut physically caught
+# under a wheel and a near-depleted battery (0.3 m/s command was sitting
+# right at/below the current static-friction floor - see THROTTLE_GAIN
+# history below for the same stiction-floor phenomenon), producing
+# apparent stalls/nonlinearity that were artifacts, not real steering
+# behavior - see qcar_steering_gain_nonlinearity_investigation project
+# memory for the full retracted dataset, kept for the record but not to be
+# reused. Clean re-test 2026-08-25 (nut removed, fresh battery, 0.4 m/s
+# for stiction headroom, user re-aiming to a fixed start position/heading
+# every run) via a 7-point 1m-arc sweep, each point back-solved for the
+# real wheel angle implied by the measured lateral deviation:
+#   cmd (rad)   measured      implied real angle (rad)
+#   0.00        21.5cm L      +0.112
+#   -0.05       10cm L        +0.052
+#   -0.08       3.5cm L       +0.018
+#   -0.085      1cm L         +0.005
+#   -0.09       dead straight  0.000
+#   -0.10       4cm R         -0.021
+#   -0.12       12cm R        -0.062
+# Clean, monotonic, no stalls/sign-flips/asymmetry - unlike the retracted
+# 2026-08-24 data. Least-squares fit: implied = 1.39*cmd + 0.119, R²=0.977
+# (the two largest-magnitude points sit slightly above the line - mild
+# hint of extra curvature out there, not investigated further). Zero-point
+# anchored to the direct -0.09 "dead straight" measurement (more precise
+# than the regression's own intercept-derived zero-crossing, -0.0857,
+# since the largest-magnitude points pull that estimate off slightly) -
+# see apply_trim() below for how STEERING_GAIN and STEERING_TRIM combine.
+# If drift or turning inaccuracy reappears, re-run this exact sweep
+# (script: steering_angle_test.py, currently only in a scratch location,
+# not committed to the repo - recreate from the project memory above if
+# needed) rather than adjusting from a single straight-line test alone,
+# since a single test can't distinguish a gain error from an offset error.
+#
+# Trim refined same day (2026-08-25) via 3 repeated trials each at -0.08,
+# -0.085, -0.09 to average out human placement/measurement noise:
+#   -0.08: 3.3, 3.2, 0.5 cm L (avg 2.33 L) | -0.085: 0, 0, 1 cm L (avg 0.33 L)
+#   -0.09: 1, 0.5, 1 cm R (avg 0.83 R)
+# Zero-crossing of the averaged points: -0.087 (this narrow a span isn't
+# enough data to also re-fit STEERING_GAIN - kept at 1.39 from the wider
+# sweep above).
+STEERING_GAIN = 1.39
+STEERING_TRIM = -0.087
 
 # PWM duty-cycle safety limits (documents/user_manual_troubleshooting.pdf):
 # saturate to +/-30% magnitude, rate-limited to 100% duty-cycle change per
@@ -136,9 +179,115 @@ THROTTLE_RATE_LIMIT = 1.0  # duty-cycle fraction per second
 # for the 0.3-0.5 m/s range above. Not validated above 0.5 m/s - re-check
 # with scripts/drive_and_log.py or scripts/check_stop_latency.py before
 # trusting a higher command. See qcar_updated_stop_distance_investigation
-# project memory for the full sweep/validation data.
+# project memory for the full sweep/validation data. FORWARD ONLY - see
+# REVERSE_DEADBAND/REVERSE_GAIN below for why reverse can't reuse these.
 THROTTLE_DEADBAND = 0.04
-THROTTLE_GAIN = 0.0667
+# 2026-09-01: nudged 0.0667 -> 0.070 - after adding REVERSE_DEADBAND/REVERSE_GAIN below, live
+# comparison at the same 0.3 m/s command showed reverse cruising noticeably faster than forward
+# (~0.40-0.44 m/s vs ~0.30-0.31 m/s). Small increase here alongside a REVERSE_GAIN reduction to
+# bring the two closer together, at the user's request - not a full recalibration, a deliberate
+# small symmetric nudge.
+THROTTLE_GAIN = 0.070
+
+# 2026-09-01: reverse silently reused THROTTLE_DEADBAND/THROTTLE_GAIN above (both
+# forward-only-calibrated, 2026-08-17) until today - never actually validated for reverse, and
+# turned out not to hold. Real symptom: "reverse takes great effort" - live-tested via
+# scripts/drive_and_log.py (production cmd_vel pipeline, not a raw duty script) across many
+# trials, forward vs reverse at the SAME commanded speed:
+#   - Forward: consistently clean, every single trial (0.30 m/s -> ~0.30-0.31 m/s cruise,
+#     0.45 m/s -> ~0.37-0.42 m/s cruise) - a stable, repeatable relationship.
+#   - Reverse: highly inconsistent at identical commanded values - sometimes a clean cruise
+#     close to forward's ratio, sometimes a 17-22s dead stall before suddenly breaking free to
+#     near-forward speed, sometimes no stall but capped at roughly half forward's real speed the
+#     whole way. This bimodal/noisy behavior (not a stable function of duty) is itself evidence
+#     of a real mechanical inconsistency in this direction, not just an uncalibrated gain -
+#     REVERSE_DEADBAND/REVERSE_GAIN below reduce how OFTEN/how badly this shows up, they don't
+#     eliminate it. STALL_TIMEOUT below remains the real backstop for the residual risk.
+#
+# Fitted from the real (non-obstacle-contaminated) trial data - duty computed via the shared
+# formula above, matched against each commanded speed's distance/time-averaged real speed
+# (deliberately not just cherry-picked cruise-phase speed, so the stall episodes pull the fit
+# toward giving reverse more duty rather than less - erring toward fewer stalls over precise
+# speed-tracking when commanded speed is low):
+#   duty=0.060 (0.30 m/s cmd): trials averaged ~0.111 m/s and ~0.0 m/s (total stall)
+#   duty=0.070 (0.45 m/s cmd): trials averaged ~0.108, ~0.177, ~0.200 m/s
+# Rounded from the resulting fit rather than kept at spurious precision, given how much
+# trial-to-trial noise underlies it. Re-derive from a fresh set of drive_and_log.py trials
+# (confirm clear space first, every time - see qcar_hardware_confirm_clear_space_before_driving
+# project memory) if this stops matching real behavior, same as THROTTLE_GAIN's own history.
+REVERSE_DEADBAND = 0.055
+# 2026-09-01: nudged 0.09 -> 0.075 -> 0.065 -> 0.056 -> 0.04 across four rounds, each retested
+# live at a 0.3 m/s command via drive_and_log.py peak cruise speed vs forward's peak at the same
+# command (battery-dependent - see note below):
+#   GAIN=0.09   -> peak ~0.42-0.44 m/s  (vs forward ~0.29 m/s, same battery)
+#   GAIN=0.075  -> peak ~0.42 m/s
+#   GAIN=0.065  -> peak ~0.35 m/s
+#   GAIN=0.056  -> peak ~0.43 m/s AFTER a battery swap (vs forward ~0.33 m/s, same fresh
+#     battery) - duty is a FRACTION of battery voltage, so a fresher/higher-voltage battery
+#     delivers more real speed for the same duty, both directions - this shifted the whole
+#     curve, not just reverse, and re-confirmed reverse still ran hotter than forward
+#     proportionally either way (~1.2-1.3x).
+#   GAIN=0.04   -> interpolated target for the fresh battery, aiming to match forward's ~0.33
+#     m/s peak
+# REVERSE_DEADBAND dominates the duty at this commanded speed (0.055 of ~0.065-0.078 total), so
+# GAIN has outsized leverage on the remainder - small GAIN changes move peak speed a lot more
+# here than the same change would for forward's much smaller deadband fraction, and the whole
+# fit is battery-voltage-dependent same as THROTTLE_GAIN's own history. Deliberate iterative
+# nudges, not a full re-fit each time - re-test with drive_and_log.py (confirm clear space
+# first) after any further change, or after a battery swap, before trusting this value.
+REVERSE_GAIN = 0.04
+
+# Precautions from documents/user_manual_system_hardware.pdf and
+# documents/user_manual_power.pdf that this file previously read the underlying HAL buffers for
+# (motorCurrent, batteryVoltage) but never actually watched - added 2026-09-01 after a real
+# "reverse takes great effort" hardware symptom raised the question of whether the FPGA's own
+# overcurrent protection was intermittently tripping. Worth the arithmetic once: at our
+# THROTTLE_LIMIT=0.3 duty cap and a nominal ~12V battery, applied voltage tops out at ~3.6V -
+# comfortably under the 5V stalled-motor-damage caution below, so that specific risk already has
+# real margin. But locked-rotor (v=0) current isn't bounded by that same margin - back-EMF is
+# zero at a true stall, so current is just V/R = 3.6V / 0.470ohm (Table 7's terminal resistance)
+# =~ 7.7A, comfortably past the FPGA's 5A/8s tier and not far from its 10A/2s tier. So a genuine
+# stiction-floor stall (the exact "straining, not moving" symptom under investigation) is a
+# real candidate for tripping the FPGA's protection even though we're nowhere near max duty.
+#
+# documents/user_manual_system_hardware.pdf, "Drive Motor and Steering Servo": onboard
+# overcurrent protection trips (motor forced to Neutral/coast mode) if current sustains 5A for
+# 8s, 10A for 2s, or 15A for 0.5s. Per documents/user_manual_troubleshooting.pdf ("e. The drive
+# motor does not function/respond to commands"): recovery requires restarting this whole
+# process (closing/reopening the HIL device), not just re-sending commands - and the QCar's own
+# LCD is the authoritative way to confirm this happened ("Overcurrent" message). The checks
+# below only print an early warning on this process's own console (nothing else can see this
+# from the dev PC side right now) - they do not and cannot override the FPGA's own protection.
+OVERCURRENT_TIERS = [(5.0, 8.0), (10.0, 2.0), (15.0, 0.5)]  # (amps, sustained seconds)
+OVERCURRENT_WARN_FRACTION = 0.7  # warn at 70% of the FPGA's own sustained-time trip threshold
+
+# documents/user_manual_power.pdf, "Low-battery and auto-shutdown": QCar shows a 'LOW BAT' LCD
+# warning below 10.5V and auto-shuts-down below 10.0V (attempts a normal shutdown first, then
+# force-disconnects power if that fails). Independent of anything in this script - just also
+# printed here for visibility, same reasoning as the overcurrent tiers above.
+BATTERY_WARN_VOLTAGE = 10.5
+BATTERY_SHUTDOWN_VOLTAGE = 10.0
+
+# documents/user_manual_system_hardware.pdf, Drive Motor section: "Holding the motor in a
+# stalled position for a prolonged period at applied voltages of over 5V can result in
+# permanent damage." CMD_TIMEOUT above only protects against a STALE command (nothing arriving)
+# - it does nothing for a continuously-refreshed nonzero command that's failing to actually
+# move the vehicle (e.g. commanded duty sitting right at/below the real stiction floor - exactly
+# the symptom under investigation 2026-09-01). This is a software-side backstop for that specific
+# gap: if throttle has been commanded above STALL_THROTTLE_THRESHOLD for STALL_TIMEOUT seconds
+# straight with no corresponding encoder motion, cut the throttle. Deliberately conservative
+# (encoder epsilon well above quadrature noise, generous timeout) - this is a safety backstop,
+# not a substitute for actually fixing the underlying stiction/gain mismatch if one exists.
+# 2026-09-01: originally 0.08 - a real bug, not just a conservative margin. desired_throttle =
+# THROTTLE_DEADBAND + THROTTLE_GAIN*|speed| only reaches ~0.053-0.073 across the ENTIRE
+# validated 0.2-0.5 m/s speed range (0.3 m/s -> ~0.06), so 0.08 could never fire at any normal
+# teleop speed - confirmed live: held reverse 3-4s with the encoder never moving at all
+# (odom_monitor.py showed a flat 0.000) and this check stayed silent throughout. Fixed to sit
+# just above THROTTLE_DEADBAND itself instead of guessing a round number unrelated to the
+# actual duty formula.
+STALL_THROTTLE_THRESHOLD = 0.045  # duty fraction - above the deadband, i.e. "genuinely trying to drive"
+STALL_ENCODER_EPS = 20  # encoder counts/cycle (~0.007 m/s at 50Hz) - treat as "not moving" below this
+STALL_TIMEOUT = 3.0  # seconds of continuous stall before cutting throttle
 
 # Tried active braking (brief reverse-throttle pulse proportional to
 # residual speed when a stop is commanded) to counter drivetrain coast -
@@ -200,8 +349,11 @@ def apply_trim(kinematic_steering):
     '''Converts a real/kinematic steering angle into the servo command that
     actually achieves it on this specific vehicle - only call this right
     before car.write(), never before odometry or anything else that cares
-    about the real physical wheel angle.'''
-    return max(-MAX_STEER_CMD, min(MAX_STEER_CMD, kinematic_steering + STEERING_TRIM))
+    about the real physical wheel angle. Inverts the measured
+    implied_real_angle = STEERING_GAIN*cmd + (real angle at cmd=0) relationship
+    by pre-dividing by the gain, so the real wheel ends up at
+    kinematic_steering, not just at kinematic_steering + a flat offset.'''
+    return max(-MAX_STEER_CMD, min(MAX_STEER_CMD, kinematic_steering / STEERING_GAIN + STEERING_TRIM))
 
 
 class Odometry:
@@ -268,6 +420,15 @@ def main():
     last_loop_time = time.time()
     period = 1.0 / READ_RATE
 
+    # State for the precaution checks documented above (OVERCURRENT_TIERS/STALL_* /
+    # BATTERY_*_VOLTAGE) - reset per relay connection alongside odom, since a fresh connection
+    # is a natural "start clean" point same as the odom frame already resetting there.
+    last_stall_encoder = None
+    stall_start_time = None
+    overcurrent_tier_start = [None] * len(OVERCURRENT_TIERS)
+    overcurrent_tier_warned = [False] * len(OVERCURRENT_TIERS)
+    battery_warn_state = None  # None / 'warn' / 'shutdown' - avoid re-printing every cycle
+
     try:
         while True:
             conn, addr = server.accept()
@@ -276,6 +437,11 @@ def main():
             buf = b''
             last_cmd_time = time.time()
             odom = Odometry()
+            last_stall_encoder = None
+            stall_start_time = None
+            overcurrent_tier_start = [None] * len(OVERCURRENT_TIERS)
+            overcurrent_tier_warned = [False] * len(OVERCURRENT_TIERS)
+            battery_warn_state = None
 
             try:
                 while True:
@@ -301,6 +467,15 @@ def main():
                                 print('bad command line, ignoring:', line)
                     except socket.timeout:
                         pass  # no new data this cycle - fall through to control loop
+                    except OSError:
+                        # Abrupt disconnect (e.g. the relay process killed rather than closed
+                        # cleanly) raises ConnectionResetError here instead of the b'' empty-recv
+                        # case above - previously unhandled, crashed the whole process (confirmed
+                        # on hardware 2026-09-01: killing a stale relay process while a new one
+                        # started up hit exactly this, took the bridge down until manually
+                        # restarted). Mirrors the send-side OSError handling below.
+                        print('dev PC relay disconnected (recv failed)')
+                        break
 
                     # Pace the actual hardware read/write to READ_RATE
                     # regardless of how fast commands arrive over the
@@ -317,11 +492,67 @@ def main():
                         target_linear = 0.0
                         target_steering = 0.0
 
+                    car.read()
+
+                    # Stall backstop (see STALL_* comment above) - based on the PREVIOUS cycle's
+                    # write, since car.read() reflects state up to now, before this cycle's
+                    # car.write() happens further down.
+                    now_encoder = float(car.motorEncoder[0])
+                    if last_stall_encoder is None:
+                        last_stall_encoder = now_encoder
+                    moving = abs(now_encoder - last_stall_encoder) > STALL_ENCODER_EPS
+                    last_stall_encoder = now_encoder
+
+                    if abs(current_throttle) > STALL_THROTTLE_THRESHOLD and not moving:
+                        if stall_start_time is None:
+                            stall_start_time = now
+                        elif now - stall_start_time > STALL_TIMEOUT:
+                            print('STALL: throttle %.2f commanded for >%.1fs with no encoder '
+                                  'motion - cutting throttle (see user_manual_system_hardware.pdf '
+                                  'stalled-motor caution)' % (current_throttle, STALL_TIMEOUT))
+                            target_linear = 0.0
+                            current_throttle = 0.0
+                            stall_start_time = None
+                    else:
+                        stall_start_time = None
+
+                    # Overcurrent early warning - mirrors the FPGA's own tiers, see
+                    # OVERCURRENT_TIERS comment above. Console-only, cannot override the FPGA.
+                    current_amps = abs(float(car.motorCurrent))
+                    for i, (amps_thresh, seconds_thresh) in enumerate(OVERCURRENT_TIERS):
+                        if current_amps >= amps_thresh:
+                            if overcurrent_tier_start[i] is None:
+                                overcurrent_tier_start[i] = now
+                                overcurrent_tier_warned[i] = False
+                            elif (not overcurrent_tier_warned[i] and now - overcurrent_tier_start[i]
+                                    > seconds_thresh * OVERCURRENT_WARN_FRACTION):
+                                print('WARNING: motor current %.1fA approaching the %.0fA/%.1fs '
+                                      'overcurrent tier - FPGA may force Neutral mode soon '
+                                      '(check QCar LCD)' % (current_amps, amps_thresh, seconds_thresh))
+                                overcurrent_tier_warned[i] = True
+                        else:
+                            overcurrent_tier_start[i] = None
+                            overcurrent_tier_warned[i] = False
+
+                    battery_v = float(car.batteryVoltage)
+                    if battery_v < BATTERY_SHUTDOWN_VOLTAGE and battery_warn_state != 'shutdown':
+                        print('WARNING: battery %.2fV below the %.1fV auto-shutdown threshold' %
+                              (battery_v, BATTERY_SHUTDOWN_VOLTAGE))
+                        battery_warn_state = 'shutdown'
+                    elif (BATTERY_SHUTDOWN_VOLTAGE <= battery_v < BATTERY_WARN_VOLTAGE
+                            and battery_warn_state is None):
+                        print('WARNING: battery %.2fV below the %.1fV LOW BAT threshold' %
+                              (battery_v, BATTERY_WARN_VOLTAGE))
+                        battery_warn_state = 'warn'
+                    elif battery_v >= BATTERY_WARN_VOLTAGE:
+                        battery_warn_state = None
+
                     if abs(target_linear) < 1e-3:
                         desired_throttle = 0.0
+                    elif target_linear > 0:
+                        desired_throttle = THROTTLE_DEADBAND + THROTTLE_GAIN * target_linear
                     else:
-                        desired_throttle = math.copysign(
-                            THROTTLE_DEADBAND + THROTTLE_GAIN * abs(target_linear), target_linear)
+                        desired_throttle = -(REVERSE_DEADBAND + REVERSE_GAIN * abs(target_linear))
                     desired_throttle = max(-THROTTLE_LIMIT, min(THROTTLE_LIMIT, desired_throttle))
                     max_step = THROTTLE_RATE_LIMIT * dt
                     delta = max(-max_step, min(max_step, desired_throttle - current_throttle))
@@ -337,7 +568,6 @@ def main():
                     if current_throttle < 0:
                         leds[5] = 1
 
-                    car.read()
                     car.write(current_throttle, apply_trim(target_steering), leds)
 
                     # Odometry uses the untrimmed/kinematic angle - see

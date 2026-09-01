@@ -1,5 +1,816 @@
 # Changelog
 
+## 2026-09-01 - Reverse gain tuning parked: REVERSE_DEADBAND=0.055, REVERSE_GAIN=0.04 (fresh battery)
+
+Closing entry for today's reverse-gain investigation (see the two entries below for the fuller
+history). Final values after iterative live tuning against a fresh battery, each round retested
+via `scripts/drive_and_log.py` (0.3 m/s, 2.5m, confirmed clear space each time):
+`REVERSE_DEADBAND=0.055` (unchanged from the original fit), `REVERSE_GAIN` walked
+0.09 -> 0.075 -> 0.065 -> 0.056 -> 0.04. Also nudged `THROTTLE_GAIN` (forward) up slightly,
+0.0667 -> 0.070, at the same time to help the two converge rather than only cutting reverse.
+
+**Final matched result**: forward peak ~0.34 m/s, reverse peak ~0.34 m/s, both clean (no stall)
+at a 0.3 m/s command, both taking ~10s for the same 2.5m distance - the closest forward/reverse
+match all session.
+
+**Important caveat, not resolved**: mid-session, forward itself hit the exact same "long dead
+stall (31s) then sudden clean breakaway" pattern that reverse had been showing all day - at a
+command (0.3 m/s) and gain forward had run cleanly at a dozen+ times before. This is strong
+evidence the underlying issue is a real, direction-independent mechanical stiction/inconsistency
+(something intermittently catching, in either direction), not a pure forward/reverse calibration
+gap - reverse likely just showed it more often today because its lower duty margin made the same
+underlying stall condition easier to trigger. Also confirmed the whole duty->speed relationship
+is battery-voltage-dependent (a battery swap mid-session shifted both forward's AND reverse's
+peak speed at the same duty, proportionally) - re-verify these constants after any future
+battery change, don't assume they hold.
+
+**Still outstanding**: the physical hands-on check (power off, spin wheels by hand, compare
+forward/reverse rotation for binding/roughness) was requested repeatedly this session and never
+completed. Do this before fully trusting reverse for a demo/K-turn scenario, especially under
+time pressure - see qcar_reverse_gain_asymmetry_investigation project memory for the full
+history and this open question.
+
+## 2026-09-01 - `qcar_bridge.py` crash fix: unhandled ConnectionResetError on abrupt relay disconnect
+
+Found on hardware: after a battery swap + QCar reboot, killed a stale `qcar_relay_node.py`
+instance (still holding the old pre-reboot clock offset) to relaunch it with a fresh one. The
+abrupt disconnect raised `ConnectionResetError` at `conn.recv()`, which was unhandled - crashed
+the whole `qcar_bridge.py` process (traceback, process exit) rather than just logging the
+disconnect and waiting for a new connection like a clean disconnect (empty `recv()`) already did.
+Added an `except OSError` alongside the existing `except socket.timeout`, mirroring the
+send-side `OSError` handling that already existed a few lines below - logs and breaks to the
+outer accept() loop instead of crashing. Redeployed and hash-verified.
+
+## 2026-09-01 - `qcar_bridge.py` gained separate REVERSE_DEADBAND/REVERSE_GAIN
+
+Live-tested "reverse takes great effort" via `scripts/drive_and_log.py` (production cmd_vel
+pipeline) across many forward/reverse trials at matched commanded speeds, LiDAR on and off,
+before and after a QCar reboot. Forward was clean and consistent every time (0.30 m/s -> ~0.30
+m/s, 0.45 m/s -> ~0.37-0.42 m/s). Reverse was not: at identical commanded values it variously
+produced a clean near-forward cruise, a 17-22s dead stall before suddenly breaking free to
+near-forward speed, or a steady but roughly-half-forward-speed cruise with no stall at all -
+different behavior on nominally identical trials, not a stable function of duty. That
+inconsistency is itself evidence this is at least partly a real mechanical asymmetry, not purely
+a calibration gap - REVERSE_DEADBAND/REVERSE_GAIN reduce how often/how badly it shows up, they
+don't eliminate the underlying inconsistency. A physical hands-on check (spin the wheels by hand,
+power off, compare forward/reverse rotation) was requested repeatedly this session and is still
+outstanding - worth doing before considering this fully resolved.
+
+Fitted REVERSE_DEADBAND=0.055, REVERSE_GAIN=0.09 (vs forward's 0.04/0.0667) from the
+distance/time-averaged real speed at each tested duty, deliberately including the stall episodes
+in the average (biases the fit toward giving reverse more duty, i.e. toward fewer stalls, rather
+than toward precisely matching commanded speed on the trials that happened to go well). Wired
+into qcar_bridge.py's throttle formula by sign of target_linear - previously reverse silently
+reused the forward-only-calibrated THROTTLE_DEADBAND/THROTTLE_GAIN pair (2026-08-17), never
+actually validated for reverse.
+
+**Safety incident during this investigation**: an early `calibrate_throttle.py` duty sweep
+(later deleted from the calibration approach in favor of production-pipeline drive_and_log.py
+tests) was run without confirming clear space first - the vehicle drove into an object at an
+untested/unexpectedly-fast duty value, requiring the user to lift it to stop it. See
+qcar_hardware_confirm_clear_space_before_driving project memory - clear-space confirmation before
+any driving action is now a hard rule, and `calibrate_throttle.py` (if still present) has a
+code-enforced distance-budget abort as a backstop, not just the verbal-ask convention.
+
+Also this session: `qcar_bridge.py` gained active checks for previously-unflagged HAL
+precautions (see immediately below), and `qcar_lidar_node.py` got a documented note on a real
+sudo-requirement discrepancy against `commands.md`.
+
+## 2026-09-01 - `qcar_bridge.py` gained active checks for previously-unflagged HAL precautions
+
+Prompted by a live hardware symptom ("reverse takes great effort") and a full audit of every
+Quanser manual (`documents/*.pdf`) for anything code-relevant that wasn't already reflected in
+`qcar_bridge.py`. `car.read()` already buffered `motorCurrent`/`batteryVoltage` every cycle but
+nothing ever looked at them.
+
+- **Overcurrent early warning**: `user_manual_system_hardware.pdf`'s FPGA overcurrent tiers
+  (5A/8s, 10A/2s, 15A/0.5s -> forced Neutral mode, requires restarting this process per
+  `user_manual_troubleshooting.pdf`'s "drive motor does not function/respond" entry) were
+  invisible from the dev-PC side entirely. Worth the arithmetic: at our `THROTTLE_LIMIT=0.3` cap
+  and ~12V battery, applied voltage is only ~3.6V (comfortable margin under the 5V
+  stalled-motor-damage caution below), but a true stall has zero back-EMF, so locked-rotor
+  current is just V/R = 3.6V / 0.470ohm (Table 7's terminal resistance) =~ 7.7A - past the 5A/8s
+  tier even at our safe duty cap. Directly relevant to the reverse-effort symptom under
+  investigation: a genuine stiction-floor stall could plausibly trip this without ever
+  approaching max duty. Added `OVERCURRENT_TIERS` tracking that prints a console warning at 70%
+  of each tier's sustained-time threshold - cannot override the FPGA, purely for visibility (the
+  QCar's own LCD "Overcurrent" message remains the authoritative confirmation).
+- **Stall backstop**: `user_manual_system_hardware.pdf`'s "holding the motor in a stalled
+  position... over 5V can result in permanent damage" caution had no corresponding protection -
+  `CMD_TIMEOUT` only catches a *stale* command (nothing arriving), not a continuously-refreshed
+  command that's failing to actually move the vehicle. Added `STALL_THROTTLE_THRESHOLD`/
+  `STALL_ENCODER_EPS`/`STALL_TIMEOUT`: if throttle stays above the stall threshold for 3s
+  straight with no corresponding encoder motion, cut it and print why. Conservative by design -
+  a safety backstop, not a fix for any underlying stiction/gain mismatch.
+- **Battery voltage warnings**: `user_manual_power.pdf`'s documented 10.5V "LOW BAT" / 10.0V
+  auto-shutdown thresholds now get a one-shot console warning each (`BATTERY_WARN_VOLTAGE`/
+  `BATTERY_SHUTDOWN_VOLTAGE`) instead of being silently invisible outside the QCar's own LCD.
+- All three reset per relay connection alongside the existing `Odometry()` reset. Moved
+  `car.read()` earlier in the loop (was previously called right before `car.write()`) so these
+  checks see fresh encoder/current/voltage data before the throttle decision each cycle -
+  removed the now-duplicate later `car.read()` call; no other timing/ordering change.
+- **`qcar_lidar_node.py`**: flagged a real discrepancy found during the same audit -
+  `user_manual_troubleshooting.pdf` says LIDAR apps need `sudo`, this project's `commands.md`
+  documents running this script *without* it. Both are apparently true in practice on this unit;
+  left as a documented note (try sudo first if this script ever fails to open the LIDAR device
+  with a permissions-looking error), not changed, since it currently works as-is.
+- Everything else in the manuals (ESD/grounding, LiPo storage/charging/fire safety, header
+  current limits, waterproofing, TX2 fan) is physical-handling only - nothing for code to check.
+- Not yet deployed to the QCar or hardware-tested - `qcar_updated`'s copy only so far.
+
+## 2026-08-31 - `config/nav2/PARAMS_REFERENCE.md` refreshed - same staleness as `TUNING.md`, same day
+
+Companion doc to `TUNING.md` (also last touched 2026-07-20), same audit method: checked every
+claimed value against the live `nav2_params.yaml`/BT XML rather than just adding new sections.
+
+- **`smoother_server` section was entirely wrong** - still described `simple_smoother` as the
+  active plugin with no mention `cusp_straightener` (custom, added 2026-08-25/26) exists at all.
+  Rewritten: `cusp_straightener` documented as the active plugin (`straight_distance`,
+  `extend_distance` including the 2026-08-29 curvature bug/fix, `min_lead_distance`);
+  `simple_smoother` reframed as dead config, not the active one.
+- **`bt_navigator.plugin_lib_names` claimed "default trees, since no custom XML is configured
+  here"** - false: `launch/qcar_nav2.launch.py` overrides `default_bt_xml_filename` to this
+  package's own `navigate_to_pose_w_replanning_and_recovery.xml`. Added that fact plus
+  `nav2_smooth_path_action_bt_node`'s addition and the `qcar_bt_nodes`/`IsPathValidDebounced`
+  tried-and-reverted note.
+- **`PathFollowCritic`/`PathAngleCritic.offset_from_furthest`**: same `3`/`2` vs. live `6`/`4`
+  discrepancy found in `TUNING.md` yesterday - flagged identically here (no changelog entry
+  documents the reversion).
+- **`amcl.recovery_alpha_fast`/`recovery_alpha_slow`**: doc claimed `0.0`/`0.0` (disabled); live
+  values are `0.1`/`0.001` (nav2's own defaults) - this one was simply wrong, not a later drift.
+- **`planner_server.smooth_path`/`tolerance` comments**: same "only smoothing applied" error as
+  `TUNING.md`, fixed; `tolerance`'s comment was a near-content-free placeholder ("same meaning as
+  before") - replaced with the real mechanism and the 2026-08-29 false-success history.
+- Added `PathDeviationCritic` tried-and-reverted note, resolved the long-standing "worth a second
+  look" `spin`-behavior question (answer was already sitting in the `bt_navigator` section once
+  the custom BT XML fact was added), and the same "last comprehensively checked" marker pattern
+  as `TUNING.md`.
+
+## 2026-08-31 - `TUNING.md` refreshed - was last updated 2026-07-20, had drifted from the live config
+
+Audited every "Current" value the doc claims against the live `nav2_params.yaml`/BT XML rather
+than just appending new sections. Found and fixed real drift, not just missing history:
+
+- **§4 `smooth_path` row was flatly wrong**: claimed the planner's internal smoothing is "the only
+  smoothing actually applied" - false since 2026-08-25, when `smoother_server`'s custom
+  `cusp_straightener` was wired into the BT via `<SmoothPath>`. This was wrong even before the
+  doc's own 2026-07-20 date, since the mid-route-cusp fix that made this necessary happened later.
+- **§2's `PathFollowCritic`/`PathAngleCritic.offset_from_furthest`**: doc claimed `3`/`2`
+  (set 2026-07-18), but the live yaml has `6`/`4` (the stock defaults). No changelog entry
+  documents this reversion - flagged as an unexplained discrepancy rather than guessed at, since
+  a 2026-08-02 re-test found "no meaningful change" between the two on a different goal, which
+  isn't the same as confirming which one is actually live and why.
+- **§5 AMCL `alpha1-5`/`update_min_d`/`update_min_a`**: doc claimed the original `0.2`/`0.25`/`0.2`
+  defaults; live values are `0.4`/`0.15`/`0.1` (raised/lowered 2026-07-15 (2), a change that
+  predates this doc's own last edit and was simply never reflected in it).
+- **§4's mid-route-cusp-freeze and inversion-tolerance-widening notes** said "not yet fixed" -
+  updated to point at the actual fix (§2a) rather than leaving stale open-problem framing.
+
+Added a new **§2a "Path smoothing"** section for the entire `cusp_straightener` smoother subsystem
+(didn't exist when this doc was last touched): `straight_distance`, `extend_distance` (including
+today's curve-continuing-extension bug and fix), `min_lead_distance`. Also added: `IsPathValidDebounced`
+tried-and-reverted note (§2), `PathDeviationCritic` tried-and-reverted note (§2 critics row),
+`GridBased.tolerance`/`max_iterations` row with the false-success lesson (§4). Added a "last
+comprehensively checked" marker at the top of the doc so future staleness is easier to catch at a
+glance instead of silently accumulating for another month+.
+
+## 2026-08-29 - Fixed the real bug: extension curvature was far too tight, robot deviated off-path and got stuck
+
+User caught the actual problem after live testing: the curve-continuing extension's curvature was
+"too large... not in line with the incoming curve" - the vehicle deviated significantly from the
+planned path right at the K-turn vertex and got stuck, since it ended up outside what MPPI/the
+costmap considered a valid position relative to the plan. Root cause: the earlier same-day fix
+(raising the `ds` guard to 0.02m) was NOT sufficient - the underlying problem wasn't a
+near-duplicate point, it was that a **two-point (single-segment) curvature estimate is inherently
+dominated by the planner's coarse angular quantization** (`angle_quantization_bins: 72`, 5deg
+steps). Even one quantization step over a perfectly normal segment length implies an
+unrealistically tight radius - e.g. 5deg over a 0.05m segment implies a 0.57m radius, tighter than
+the vehicle's own configured 1.0m minimum turning radius. So the extension was routinely curving
+far more sharply than the incoming path actually did, exactly matching the reported symptom.
+
+**Real fix**: estimate curvature over a **~0.15m lookback window** of the actual incoming path
+(averaging the yaw change across several planner segments, stopping at the previous cusp or path
+start if closer) instead of the single adjacent segment. The quantization noise is bounded to
+~5deg total regardless of window length, so averaging over more real path distance makes that
+error proportionally much smaller relative to the curve's true accumulated turning - this is what
+makes the extension continue the SAME curve rather than grafting on a different, tighter one.
+Below a 0.05m window (not enough path available, e.g. right after path start or the previous
+cusp), falls back to straight rather than trusting an unreliable short estimate.
+
+**Verified in sim** on the K-turn reproduction goal: 0 `Failed to make progress` events (the
+earlier buggy-curvature run had 2 - this was the deviate-off-path/stuck symptom), goal succeeded
+in ~37s (vs ~99s with the buggy curvature). Also directly observed the `min_lead_distance` skip
+firing for the first time this session: `cusp at idx=1: REVERSE-entering but only 0.071m ahead
+(< 0.300m) - robot already at/past it, skipped` - confirming both of today's smoother fixes are
+now working together correctly. Not yet a multi-trial timing comparison, not yet hardware-tested.
+
+## 2026-08-29 - Code review of today's `cusp_straightener` changes: two robustness fixes
+
+User asked to revisit the day's smoother changes (curve-continuing `extend_distance` +
+`min_lead_distance`) for outliers. Found and fixed two real edge cases in
+`cusp_straightener_smoother.cpp`:
+
+1. **Curvature estimate could blow up for closely-spaced points.** The incoming-curvature
+   estimate (`kappa = dyaw/ds`) only guarded against literal division-by-zero (`ds > 1e-6`), not
+   against noise amplification - with `angle_quantization_bins: 72` (up to ~2.5deg of quantization
+   jitter between "straight" poses), a small-but-nonzero `ds` combined with ordinary yaw noise
+   could produce a wildly exaggerated curvature, making the extension arc spiral instead of gently
+   continuing the incoming curve. Raised the guard to a physically meaningful minimum baseline
+   distance (0.02m) - below that, falls back to straight (`kappa=0`) rather than trusting a
+   noise-dominated two-point estimate.
+
+2. **`extend_distance <= 0` produced a duplicate point exactly at the cusp.** With
+   `extend_distance_` at or below zero (misconfiguration, or deliberately disabled), the old code
+   still ran one sub-step of zero arc length, pushing a point identical to the cusp itself right
+   next to it - a zero-length segment that could confuse downstream consumers expecting distinct
+   points. Not triggered by the current default (0.15m), but a real landmine if ever changed.
+   Extension sub-loop now skipped entirely when `extend_distance_ <= 0`.
+
+Also noted, not changed (confirmed intentional, matches the `min_lead_distance` fix's own
+rationale): a cusp skipped for being too close to the robot (`lead_distance < min_lead_distance`)
+now gets NO treatment at all, including the plain `straight_distance` blend that previously always
+ran regardless of proximity - this is a deliberate consequence of the fix (an already-reached cusp
+shouldn't be reshaped at all, not just not-extended), not an oversight.
+
+Rebuilt clean. No live nav2 instance was running at review time, so not re-tested live this pass -
+the next launch will use the rebuilt `libqcar_smoothers.so` automatically.
+
+## 2026-08-29 - `cusp_straightener` no longer re-extends a K-turn cusp the robot has already reached
+
+User's report: the corner-extension (`extend_distance`, curve-continuing as of earlier today) was
+visibly "getting added wherever there's a break in the curve" - not at spurious non-K-turn cusps
+(the forward/reverse classification was already confirmed correct via `forward-entering, skipped`
+log lines), but repeatedly on the SAME real K-turn cusp, once per replan, all the way until the
+robot had essentially already reached it. Confirmed directly in a fresh log
+(`nav2_curveext_test_1787995046.log`): one real K-turn's cusp got the extend+straighten treatment
+re-applied on 8 separate replans as the robot approached it, cusp index shrinking from idx=94 down
+to idx=1 in the replanned path (path length 119 -> 30 points) - by idx=1 the robot is essentially
+already at the cusp, already mid-maneuver, and the smoother was still reshaping the path right
+under it each time instead of a one-time approach adjustment.
+
+**Fix**: added `min_lead_distance` (default 0.3m) to `CuspStraightenerSmoother`. Computed the arc
+length from the replanned path's start (`original[0]`, the robot's live pose) to each cusp; only
+apply the extend+straighten treatment when the cusp is still at least `min_lead_distance` ahead -
+otherwise skip it (new log line: `REVERSE-entering but only X.XXXm ahead (< 0.300m) - robot
+already at/past it, skipped`), leaving that portion of the path untouched. Declared as a normal
+smoother parameter (`nav2_params.yaml`, `cusp_straightener.min_lead_distance: 0.3`).
+
+Rebuilt, sim-tested on the K-turn reproduction goal twice: both succeeded, no regression. The
+specific `skipped` log line wasn't captured in either trial - the first completed before any
+replan's cusp got that close (nondeterministic sim/replan timing vs. the original bad run), the
+second started from a position already past the maneuver (reused robot pose from the first
+goal's end). The arc-length logic itself is straightforward and the parameter is confirmed loaded
+correctly (`CuspStraightenerSmoother instantiated with ... min_lead_distance 0.300`) - correct by
+code review, but the skip branch specifically hasn't been directly observed firing yet. Live
+testing (the user's own session, left running with this fix loaded) is the next real check.
+
+## 2026-08-29 - Reverted `GridBased.tolerance` back to 0.5: widening it caused silent false successes
+
+The `tolerance: 0.5 -> 1.0` change (previous entry below) fixed the near-wall planning failure it
+targeted, but the user reported the real cost in live testing: goals now sometimes reported
+`Goal succeeded` while the robot ended up noticeably far from the requested goal and in the wrong
+orientation. Root cause is inherent to the mechanism itself, not a bug: when `tolerance` lets the
+planner substitute the closest feasible node for an unreachable exact goal, that substituted pose
+- not the original requested goal - becomes the plan's actual endpoint. `FollowPath`'s goal
+checker only ever compares against the plan it was given (`path.poses.back()`), and nothing
+downstream in the stock `NavigateToPose` behavior tree rechecks the final pose against the
+original requested goal. So widening `tolerance` doesn't just rescue tight-but-real goals - it
+silently accepts "close enough, possibly wrong-facing" as success for ANY goal that's marginally
+infeasible, up to the full tolerance radius away, with no indication in the result that a
+substitution happened. For a demo/report, a silent wrong-pose "success" is worse than an honest
+failure - failures are visible and diagnosable, false successes actively misreport what happened.
+
+**Reverted**: `nav2_params.yaml`, `planner_server.GridBased.tolerance: 1.0 -> 0.5` (back to the
+originally-tuned value). The near-wall goal this was fixing (`0.947435, 4.57429`, ~0.15-0.20m
+from a wall) will fail outright again rather than silently succeed at the wrong pose - the correct
+fix for that specific goal, if it's a real target, is to ensure genuine clearance there (see the
+"Diagnosed a planner failure" entries the same day), not to relax the acceptance criterion
+globally. No live nav2 instance was running at the time of this revert, so only the config file
+needed updating.
+
+## 2026-08-29 - Fixed near-wall goal planning failures: `GridBased.tolerance` 0.5 -> 1.0
+
+Two goals sent minutes apart to nearly the same map location (~0.15-0.20m from a wall, tighter
+than the vehicle's 0.22m footprint half-length) both failed identically: `SmacPlannerHybrid`
+logged `failed to create plan, exceeded maximum iterations` on all 6 `NavigateRecovery` retries,
+ending in `Goal failed` (see the two "Diagnosed a planner failure" investigations this same day).
+Since both failures were real, intended targets (not misclicks), investigated whether nav2's
+`tolerance` parameter (already 0.5m in `GridBased`) could be made to rescue near-goal-infeasible
+cases like this instead of failing outright.
+
+Confirmed against the actual `nav2_smac_planner` search loop (`a_star.cpp`, humble branch,
+GitHub): the search loop is `while (iterations < max_iterations && !queue.empty())`; on exit
+(either condition), it checks `if (_best_heuristic_node.first < getToleranceHeuristic())` and
+backtracks to the closest node it ever reached within `tolerance`, rather than failing outright -
+so `tolerance` genuinely is meant to rescue exactly this situation (goal itself infeasible, but a
+nearby feasible pose exists), even on iteration-budget exhaustion, not just a clean queue-empty
+exit. In practice `tolerance: 0.5` wasn't enough for this particular tight corner.
+
+**Tested live** (`ros2 param set /planner_server GridBased.tolerance 1.0` on the already-running
+node, no restart needed): re-sent the exact goal that had just failed (`0.947435, 4.57429`,
+orientation `(0,0,-0.999905,0.0137576)`) - this time `planner_server` found a plan immediately
+(no more "exceeded maximum iterations"), `smoother_server` applied the curve-continuing
+`extend_distance` correctly (1 reverse cusp), `FollowPath` aborted/retried twice on "Failed to
+make progress" (separate, already-characterized controller behavior near tight goals, not a
+planning failure) then succeeded: `Reached the goal! Goal succeeded`.
+
+**Changed**: `nav2_params.yaml`, `planner_server.GridBased.tolerance: 0.5 -> 1.0`. Sim-validated
+on this one case only - not yet a multi-trial comparison, not yet hardware-tested. Widening
+tolerance to 1.0m means the planner will now also settle for a pose up to 1m from any requested
+goal when the exact goal is infeasible, which is a real behavior change worth knowing about: for
+goals that *are* freely reachable, this has no effect (the planner still reaches the exact pose
+when it can); it only changes behavior for goals that were failing outright before.
+
+## 2026-08-29 - `cusp_straightener`'s `extend_distance` now continues the incoming curve instead of cutting straight
+
+Changed the corner-push mechanism (`extend_distance`, added 2026-08-26) in
+`src/smoothers/cusp_straightener_smoother.cpp`. Previously it pushed the cusp point
+`extend_distance` further along a straight line at the cusp's own heading before the reverse
+blend began - a hard "cut straight right at the corner" even when the vehicle was still curving
+on approach. Now it estimates the incoming leg's curvature at the cusp (from the yaw change over
+its last segment: `kappa = dyaw/ds`) and extends along a constant-curvature arc with that same
+curvature instead, generated as several sub-poses (0.03m steps) so the curve is actually visible
+to downstream consumers rather than implied by one endpoint. Degrades to the old straight-line
+behavior automatically when the incoming leg was already straight (`kappa ~ 0`). The subsequent
+reverse-leg straight-run blend (`straight_distance_`, unchanged in concept) is now anchored to the
+extension's own end heading (`ext_yaw = cusp_yaw + kappa * extend_distance`) rather than the
+original cusp heading, since that's the direction the vehicle is actually facing once it reaches
+the end of the extension - required for the reverse leg to still point the right way, not new
+behavior on its own.
+
+Rebuilt (`colcon build --packages-select qcar_updated`), then smoke-tested in sim on the standard
+K-turn reproduction goal (`4.28, 6.35, -1.5708`): goal succeeded (~99s, comparable to prior trial
+ranges), the new curvature-extension code path ran on 8 reverse-cusp events across the run (several
+replans) with no NaN/crash - just the usual transient `Failed to make progress` controller retries
+already characterized as normal. Straight_distance/extend_distance values (0.21/0.15) left
+unchanged; only the shape of the extension changed. Not yet re-validated on hardware.
+
+## 2026-08-29 - Diagnosed a planner failure: goal placed too close to a wall exhausts the iteration budget
+
+Sim run after the config revert (see entries below): a goal sent via RViz at map coords
+(0.89, 4.61) failed after cycling through all 6 `NavigateRecovery` retries, each attempt logging
+`GridBased: failed to create plan, exceeded maximum iterations` from `planner_server`, interleaved
+with the `RoundRobin` recovery actions (clear costmaps, wait, backup), ending in
+`bt_navigator: Goal failed`.
+
+Root cause, confirmed by sampling `qcar_map_sim.pgm` directly (resolution 0.05m/px,
+origin [-7.17, -8.70]): the goal pose sits only **~0.20m** from the nearest occupied (wall) cell.
+The robot's footprint (`nav2_params.yaml`, `local_costmap`/`global_costmap.footprint`) is a
+0.44m x 0.18m rectangle (`[[0.22, 0.09], [0.22, -0.09], [-0.22, -0.09], [-0.22, 0.09]]`), so no
+collision-free full-footprint pose exists at or near that goal - `SmacPlannerHybrid` (Hybrid-A*,
+`GridBased`) burns through its entire iteration budget (`max_iterations: 1000000`) searching for
+one and never finds it, on every one of the 6 retries, before the whole `NavigateToPose` goal is
+aborted.
+
+This is a **goal-placement issue, not a code/config regression** - `planner_server`, footprint, and
+inflation config are untouched by anything reverted or restored this session. Practical takeaway
+for future goal selection (sim or hardware): keep RViz 2D Goal Pose clicks at least ~0.3-0.4m
+clear of any wall/obstacle, given this vehicle's footprint and the planner's collision-checking
+against it. Same underlying mechanism (iteration-budget exhaustion, not time-budget - see the
+planner search-time investigation referenced in the qcar_updated_mppi_cusp_freeze_investigation
+memory) as previously characterized for hard/long goals; this is the first time it was traced to
+insufficient wall clearance specifically.
+
+## 2026-08-29 - Nav2 sim smoke test after the `simple_smoother` restore: clean bring-up, no rebuild needed
+
+Verified the working tree launches correctly after the config revert above. `nav2_params.yaml` is
+symlink-installed (`install/qcar_updated/share/.../nav2_params.yaml -> src/.../nav2_params.yaml`),
+so the `simple_smoother` restoration took effect immediately with no rebuild. Confirmed all
+compiled libraries (`libqcar_smoothers.so`, `libqcar_bt_nodes.so`, `libqcar_critics.so`) were
+already built after their newest source/header edits from 2026-08-26 - nothing stale, nothing to
+rebuild. Sim launch (`qcar_nav2.launch.py launch_sim:=true`) came up clean: `bt_navigator`
+connected with bond, both `lifecycle_manager_localization`/`_navigation` reported managed nodes
+active, `smoother_server` configured `cusp_straightener` (straight_distance 0.210,
+extend_distance 0.150) with the restored `simple_smoother` block present but correctly unused (not
+in `smoother_plugins`). Only log warning was a harmless RViz GLSL shader link message. Stack was
+torn down cleanly afterward (`SIGTERM` then `SIGKILL` for the one process, `nav2_container`, that
+didn't exit on `SIGTERM` alone).
+
+## 2026-08-29 - Partial revert of the 2026-08-26 cleanup pass: dead `simple_smoother` config restored
+
+User asked to revert "the cleanup pass" since they suspected it as a possible cause of the
+persistent-invalid-path hardware failure investigated on 2026-08-26. Checked: the cleanup
+pass (previous entry below) only touched comments and removed the unused `simple_smoother` block
+- no active behavior changed, and this was already confirmed via a post-cleanup sim trial at the
+time. The actual disaster-run investigation points at `qcar_clock_offset`/`IsPathValidDebounced`
+(already reverted separately - see the "IsPathValidDebounced + max_cusps" entry below), not this
+pass. No git commit existed from before the cleanup pass to restore exact prior comment text from
+(none of today's/yesterday's nav2 work has been committed yet), so a byte-for-byte comment revert
+wasn't possible without fabricating prose. Landed on a partial, honest revert instead: restored
+the dead `simple_smoother` block in `nav2_params.yaml`'s `smoother_server` (still unused - no
+`<SmoothPath>` call for it in the BT - but matches the project's own "don't proactively remove
+dead config" rule, which the cleanup pass arguably violated). Condensed comments left as they are
+- they're accurate for the current state and rewriting them from memory risked introducing new
+inaccuracies for no functional benefit. Current live config (BT, critics, smoother selection) is
+otherwise unchanged and should be functionally identical to the state before the cleanup pass.
+
+## 2026-08-26 - Multiple real-hardware maps scanned; stale variants left in maps/, needs manual cleanup
+
+Re-scanned the hardware map several times today (fresh SLAM sessions via `qcar_slam.launch.py`,
+each `map_saver_cli`'d to a new file, then promoted to the active `qcar_map_hardware.yaml` by
+copying in and backing up the previous one). Active map as of end of day: originally
+`qcar_map_hardware_latest`/`_v2`'s content, promoted last. **`maps/` now has several stale
+variants sitting alongside it that were never cleaned up**: `qcar_map_hardware_new.{pgm,yaml}`,
+`_latest.{pgm,yaml}`, `_v2.{pgm,yaml}`, `_prev.{pgm,yaml}`, `_prev2.{pgm,yaml}`,
+`_prev3.{pgm,yaml}` - only `qcar_map_hardware.yaml` itself (and `qcar_map_sim.yaml`, untouched)
+are actually referenced by any launch file. Left in place deliberately (not proactively deleted -
+see the qcar_updated_dont_proactively_cleanup_dead_config memory) since one of the `_prevN`
+backups may still be wanted as a fallback, but this is real clutter worth a manual pass to decide
+what to keep before it gets confusing.
+
+## 2026-08-26 - Code cleanup pass: dead config removed, verbose historical comments condensed
+
+Requested cleanup of the whole stack once the cusp-freeze fix (smoother + extend_distance) was
+locked in. Two categories of change, comment-only/dead-code-only - no behavior change, confirmed
+via a post-cleanup sim rebuild + trial matching pre-cleanup numbers (40.1s/0 recoveries on the
+K-turn reproduction goal, vs. the already-validated 38.3-48.1s range).
+
+**Removed** (genuinely dead, self-documented as unused): the `simple_smoother` block in
+`smoother_server` (`nav2_params.yaml`) - never wired into any BT's `<SmoothPath>` call, and its
+own comment already said so.
+
+**Condensed** (trimmed multi-experiment trial-and-error narratives that are now also captured in
+this CHANGELOG/the project memory, kept the load-bearing "why" + final value + a pointer to full
+history): `nav2_params.yaml` shrank 750→633 lines - `yaw_goal_tolerance`, the `FollowPath`/MPPI
+intro comment, `batch_size`, `vx_std`/`wz_std`, the `PreferForwardCritic`-removal rationale,
+`EarlyCommitCritic.active_path_points`, `GoalAngleCritic.cost_weight` (31→14 lines, the worst
+offender), `PathAlignCritic.cost_weight`, the `smoother_server`/`cusp_straightener` block, and
+`minimum_turning_radius`. Also condensed: `navigate_to_pose_w_replanning_and_recovery.xml`'s
+header comment (69→~20 lines, kept the conclusion of the SingleTrigger/Fallback debugging saga,
+cut the blow-by-blow), `cusp_straightener_smoother.hpp`'s doc comment (54→~17 lines), one
+redundant inline comment in `cusp_straightener_smoother.cpp`, and `early_commit_critic.hpp`
+(40→~24 lines, an older critic from a prior session, also in scope).
+
+Left alone: `qcar_bridge.py`'s steering/throttle calibration comments (real measured data tables
+needed to reproduce the calibration, not narrative bloat) and all scripts in `scripts/`/
+`qcar_onboard/` (no dead code or debug leftovers found).
+
+## 2026-08-26 - IsPathValidDebounced + max_cusps: reverted ahead of video capture
+
+Both `IsPathValidDebounced` (see full entry below) and the `cusp_straightener.max_cusps` cap
+(see the further-below entry) were reverted the same day they were added, after a real-hardware
+run on a newly-scanned map produced a disaster path: the robot never executed its reverse
+segment at all.
+
+**What actually happened** (log-verified): the local costmap reported the current path
+persistently invalid - not a single-tick blip, but confirmed invalid on 2 consecutive checks,
+every single RateController cycle (~1.5-2.6s), for the entire run. Each confirmed-invalid
+triggered `IsPathValidDebounced` to fail correctly (exactly as designed) and force a replan; each
+replan aborted the in-progress `FollowPath` action and handed the controller a brand-new path.
+The robot was never given an uninterrupted window to execute the reverse segment - the same
+"interrupting a maneuver, however triggered, makes it worse" failure mode from the original
+2026-08-25 diagnosis, just triggered by a new mechanism this time. `max_cusps` was not the actual
+cause in this run (every replan came back at 2 cusps, well under the cap) but was reverted
+alongside it to get back to a single, fully-known-good state rather than debug two things at once
+under time pressure.
+
+**Most likely root cause, not fully confirmed**: `qcar_clock_offset` was still at its default
+0.0 (unmeasured) on the relay for this session - confirmed via the relay's own startup warning.
+A quick re-measurement after a battery swap earlier in the session found a real, non-trivial
+offset (~0.15s after discarding a noisier first SSH sample). If `/scan`/`/odom` timestamps are
+off by that much, the local costmap can genuinely misplace obstacles relative to the robot's true
+current pose, which would explain a REAL (not falsely-triggered) persistent invalidity on an
+otherwise-fine path. Applied `qcar_clock_offset:=0.152` to the relay as a fix and had one goal in
+progress with it when the decision was made to revert everything instead of keep debugging live,
+so this fix is not yet confirmed to resolve the issue.
+
+**Reverted**: `IsPathValidDebounced` back to stock `IsPathValid` in
+`navigate_to_pose_w_replanning_and_recovery.xml`; `qcar_bt_nodes` removed from
+`bt_navigator.plugin_lib_names`; `max_cusps` rejection logic removed from
+`cusp_straightener_smoother.cpp`/`.hpp` and its param removed from `nav2_params.yaml`. All source
+files kept (`src/bt/is_path_valid_debounced_condition.cpp`), just deselected. Active config is
+back to exactly what was validated earlier today in sim (mean 43.9s/0 recoveries) and on hardware
+(2/2 goals succeeded). The `qcar_clock_offset:=0.152` fix on the relay was left in place (it's a
+launch parameter, not a code change, and is very likely a genuine improvement regardless of
+today's BT-node revert) - re-measure at the start of any future session, since it drifts.
+
+## 2026-08-26 - IsPathValidDebounced: fixes false-positive replans, locked in
+
+User's diagnosis, prompted by the `is_path_valid` service mechanism explanation earlier today: the
+stock `IsPathValid` BT condition (`nav2_behavior_tree`) declares the whole path invalid - and
+triggers a full replan - the instant a SINGLE tick's check against the live local costmap fails,
+with no debounce. A single frame of sensor noise, a transient TF jitter, or a momentary
+self-detection artifact can flip one path pose "invalid" for exactly one tick even though the
+path is still genuinely fine - forcing an unnecessary replan, and per today's earlier
+investigation, an unnecessary replan from a mid-maneuver pose is exactly what produces the
+messiest, highest-cusp-count plans.
+
+**Implemented** `IsPathValidDebouncedCondition` (`src/bt/is_path_valid_debounced_condition.cpp`),
+a new custom BT condition node - loaded via BT.CPP's own plugin mechanism
+(`BT_REGISTER_NODES`/`bt_navigator.plugin_lib_names`, distinct from the pluginlib mechanism used
+by the smoother/critic plugins). Otherwise an exact copy of stock `IsPathValidCondition`'s service
+call (verified against `is_path_valid_condition.cpp` on GitHub, humble branch - same
+`/is_path_valid` service, same request/response types), but only reports the path invalid after
+`consecutive_failures_required` (2) ticks in a row report invalid; a single valid response resets
+the counter immediately. Since the check is already rate-limited to 1Hz by the existing
+`RateController`, this means a real, persistent obstacle is still caught within ~2s, while a
+single-frame blip is fully absorbed.
+
+**Build gotcha hit and fixed**: the plugin loaded but `bt_navigator` failed with `can't find
+symbol [BT_RegisterNodesFromPlugin]` - `BT_REGISTER_NODES`'s `BTCPP_EXPORT` macro expands to
+nothing unless the target has `BT_PLUGIN_EXPORT` defined
+(`target_compile_definitions(qcar_bt_nodes PRIVATE BT_PLUGIN_EXPORT)`), so the registration
+entry point wasn't actually exported from the `.so`. Fixed, confirmed via `nm -D` showing the
+symbol as exported (`T`) before retesting.
+
+**3 trials on the K-turn reproduction goal**: 38.2s, 38.3s, 40.4s - mean 39.0s, **0 recoveries in
+every trial**, confirmed actively absorbing 2-3 false-positive blips per trial (logged directly:
+`IsPathValidDebounced: reported invalid (N/2 consecutive) - riding it out`). Beats the
+already-locked-in baseline (45.2s, 38.3s, 48.1s, mean 43.9s) on both mean and variance. **Locked
+in**: `IsPathValidDebounced` replaces `IsPathValid` in
+`navigate_to_pose_w_replanning_and_recovery.xml`, `qcar_bt_nodes` added to
+`bt_navigator.plugin_lib_names`.
+
+**Logging gap found and fixed** (same day, real-hardware trial): the node only logged the
+absorbed ("riding it out") case, not the confirmed-invalid case that actually triggers a replan -
+made a real replan sequence look like it "just happened" with no visible cause when tracing a
+hardware run. Added a log line for the confirmed-invalid/replanning-now branch too.
+
+Also added `cusp_straightener.max_cusps` (default 4): real hardware produced a 16-cusp plan for a
+goal that should've been simple - `smooth()` now rejects any plan over this count outright
+(returns false), forcing a retry via the existing RecoveryNode machinery instead of trying to
+straighten an excessively complex plan. A strict `max_cusps=2` test confirmed the rejection path
+fires correctly (observed a real 2-cusp plan get invalidated by IsPathValidDebounced, replan to
+4 cusps, rejected, retry to 3 cusps, rejected, retry to 2 cusps, accepted) but caused more
+replan/reject churn than worth it for a video-capture run - reverted to 4 for actual use.
+
+## 2026-08-26 - PathDeviationCritic: implemented the deferred deviation-correction idea, reverted
+
+Implemented the deviation-based path-seeking idea deferred earlier today (see
+`qcar_updated_mppi_cusp_freeze_investigation` memory's "deferred idea" section): a new
+`PathDeviationCritic` (`src/critics/path_deviation_critic.cpp`, same pattern as
+`EarlyCommitCritic`) that, once the robot is more than `deviation_threshold` from the path,
+pulls sampled trajectories toward a point `lookahead_offset` points further along the path
+instead of the nearest one - "keep making progress" rather than "insist on an exact rejoin".
+Zero-cost and inactive whenever the robot is within `deviation_threshold` of the path, so it
+should never affect on-track behavior.
+
+**3 trials on the established K-turn reproduction goal (`4.28, 6.35, -1.5708`), clean relaunch
+each**: 112.8s, 71.7s, 38.4s - mean 74.3s, 0 recoveries in any trial. Compared against the
+already-locked-in config's own validated numbers (45.2s, 38.3s, 48.1s, mean 43.9s): worse mean
+AND much wider variance (38-113s vs 38-48s). Never caused an outright recovery, but the extra
+critic appears to be fighting `PathAlignCritic` rather than helping - net effect is slower, less
+consistent runs, not faster/safer ones.
+
+**Reverted before moving to video capture**: removed `PathDeviationCritic` from
+`controller_server.FollowPath.critics` in `nav2_params.yaml` (code and param block both kept,
+deselected - same pattern as the smoother's reverted v1). Active config is back to exactly what
+was validated earlier today (`cusp_straightener` with `extend_distance`, no `PathDeviationCritic`).
+Do not re-enable without a different design (e.g. a smaller weight, a different lookahead
+mechanism, or reducing `PathAlignCritic`'s own weight conditionally instead of adding a competing
+critic) and a fresh multi-trial comparison.
+
+## 2026-08-26 - Real-hardware validation of the fixed+extended cusp_straightener smoother
+
+Ran nav2 on real hardware (map `qcar_map_hardware.yaml`) with the locked-in `cusp_straightener`
+config (`straight_distance: 0.21`, `extend_distance: 0.15`) active, output captured to a log file
+this time so the smoother's `RCLCPP_INFO` diagnostics (cusp count/classification per `smooth()`
+call) were available for real analysis instead of CSV forensics. User sent two goals manually via
+rviz while nav2 ran clean (no gazebo/rviz/stray processes beforehand).
+
+**Goal 1** `(0,0) -> (5.15,-0.64)`: 50.1s, **succeeded, 0 recoveries**. 7 `smooth()` calls; cusp
+counts across them: 1, 1, 1, 1, 8, 8, 0 (final approach was cusp-free).
+**Goal 2** `(4.87,-0.57) -> (-1.92,-0.14)`: 96.8s, **succeeded, 0 recoveries**. 8 `smooth()` calls;
+cusp counts: 5, 5, 5, 5, 9, 10, 5, 3 (settled to 3 for the final ~60s of uninterrupted execution).
+
+Both results are a good sign for the fix holding up on hardware - no recoveries needed even
+though several replans produced far more complex paths (up to 10 cusps) than anything validated
+in the sim trials above (max ~3 cusps seen there).
+
+**Investigated whether the replan pattern itself was a problem, corrected an initial
+misdiagnosis**: the first few `smooth()` calls in Goal 1 landed close together (944.071, 944.110,
+945.150, 946.200 - epoch seconds), which initially looked like an unthrottled/noisy replan burst.
+Re-reading `navigate_to_pose_w_replanning_and_recovery.xml` showed this is not a bug: `IsPathValid`
+is already gated by a `RateController hz="1.0"` (deliberately tuned back on 2026-07-19, full
+history in that file's own header comment). The timestamps are fully explained by that design:
+`944.071` is the unconditional `InitialComputePathToPose` (runs once, outside the
+RateController); `944.110` (+0.04s) is the RateController's own first tick, which BT.CPP fires
+immediately before settling into its steady interval; `945.150`/`946.200` are then exactly 1s
+apart, textbook steady-state behavior. The ~15.6s gap before the next real replan (961.800) means
+`IsPathValid` kept passing for ~15 consecutive 1Hz checks with nothing to do. **No change made** -
+an initial plan to add a second `RateController` around `IsPathValid` was correctly identified as
+redundant before implementing it, since one already exists and is already tuned/documented there.
+
+**Banked for future investigation, not acted on today**: why real-hardware replans occasionally
+produce much higher cusp counts (8-10) than anything seen in the sim reproduction (max ~3). No
+validated root cause - most likely `SmacPlannerHybrid` responding to genuinely more awkward
+real goal/environment geometry, but confirming that (and any fix, e.g. retuning
+`reverse_penalty`/`change_penalty`) needs the same relaunch-clean, multi-trial validation process
+used throughout this investigation, not a same-day change. Revisit with a full session's time
+budget, alongside the deferred goal-direction-seeking idea below.
+
+## 2026-08-26 - Cusp-freeze reproducibility trials + a real bug found in the v2 smoother
+
+Ran 3 relaunch-fresh trials each of baseline (no smoother) and v2 `cusp_straightener`, same
+corridor goal (`4.28, 6.35, -1.5708`), to check reproducibility and get a fair comparison.
+
+**Baseline (no smoother)**: 81.3s/1 recovery, 81.1s/1 recovery, 168.1s/4 recoveries. High
+run-to-run variance confirmed - same config/goal/map, ~2x time and 4x recoveries between the best
+and worst trial. Consistent with the MPPI-stochastic-freeze diagnosis, not a deterministic
+planning defect. The previously-reported left-steering spike during the freeze was NOT
+consistently present: 2/3 trials showed no anomaly at all (only a legitimate final-orientation
+correction at the very end), 1/3 showed brief (single-sample, ~50ms) left flickers during the
+freeze - much smaller than the ~0.5s sustained spike seen earlier with v2 active.
+
+**v2 smoother**: 96.6s/2 recoveries, 101.4s/2 recoveries, then a severe outlier -
+**432.8s/12 recoveries**, ~75% of the run stagnant, including a failed `BackUp` recovery action.
+v2's mean (~210s) and worst case (433s) are both roughly 2x and 2.5x worse than baseline's,
+respectively - this run of trials does NOT support v2 as an improvement.
+
+**Bug found** (`cusp_straightener_smoother.cpp`): the smoother detected cusps once at the top of
+`smooth()`, then processed each cusp **in place** on the same `path.poses` array it was mutating.
+If two cusps end up close together - plausible on a path replanned from a robot pose mid-maneuver
+(e.g. reverse briefly, then immediately forward again), which is exactly what happens during a
+recovery cycle - an earlier cusp's blend (which rewrites poses up to `straight_distance_` past it)
+could corrupt the position/orientation data a later, nearby cusp reads to classify itself
+(forward- vs reverse-entering) and compute its own straight-line target. A plausible direct cause
+of the 432.8s outlier, which had 12 replans (12 fresh `smooth()` calls, each on a path shaped by
+wherever the robot happened to be mid-recovery) - far more opportunity for a multi-cusp,
+close-together path than the clean single-cusp initial plan. **Fixed**: `smooth()` now snapshots
+`path.poses` into a read-only `original` vector before any modification: every geometric decision
+(cusp detection, forward/reverse classification, and the blend's interpolation targets) reads
+from `original`, only ever writing results into the live `path`. Also added `RCLCPP_INFO` logging
+of cusp count and each cusp's classification, so this is directly visible in the nav2 log on
+future runs instead of needing separate CSV forensics.
+
+Also fixed: `log_goal.py` (scratch, not committed) previously logged only the *first* `/plan`
+message, so a trial with multiple replans (like the 432.8s outlier) left every subsequent
+replanned path unrecorded - no way to check what shape those paths actually had. Now logs every
+`/plan` message it receives, each to its own sequence-numbered CSV file.
+
+**Re-tested with the fix in place, 3 trials**: 59.3s/0 recoveries, 97.1s/2, 103.7s/2 - mean 86.7s
+/ 1.3 recoveries, worst case 103.7s. This clearly beats baseline on every axis (mean 110.2s/2
+recoveries, worst case 168.1s) and is nowhere near the old buggy v2's 432.8s outlier. Both
+trial 2 and trial 3 logged genuine multi-cusp replans (2 cusps each) handled correctly by the
+fixed classification.
+
+**User-proposed further improvement: extend the corner.** Sketch: instead of the incoming and
+outgoing legs of a K-turn meeting at one precise geometric point (a sharp vertex the path - and
+MPPI's cusp-arrival gating - must converge on exactly), extend each leg *past* the natural
+corner so they overlap/cross, giving a wider margin around the transition rather than a single
+tight point. Implemented as a new `extend_distance` parameter (default 0.15m) on
+`CuspStraightenerSmoother`: at each REVERSE-entering cusp, a new point is inserted
+`extend_distance` past the original cusp position, continuing straight in the *incoming* leg's
+own heading (as if the vehicle kept driving a little further before reversing); the existing
+`straight_distance` blend then starts from this new, pushed-out point instead of the original
+cusp, so the reverse leg has to travel back past the incoming leg's overshoot to rejoin the
+original downstream curve - producing the crossed/overlapping corner from the sketch rather than
+a single sharp vertex. Required rewriting `smooth()` to build a new output path (inserting a
+point changes the path's length, unlike the previous in-place-only modification) - still reads
+only from the `original` read-only snapshot per cusp, so the multi-cusp-corruption fix above is
+preserved.
+
+**Tested, 3 trials**: 45.2s/0 recoveries, 38.3s/0, 48.1s/0 - mean 43.9s, **zero recoveries in
+every trial**. This roughly halves fixed-v2's own mean (86.7s) and eliminates recovery triggers
+entirely across the full set, on top of already beating baseline. **This is now the locked-in
+config**: `extend_distance: 0.15` added alongside `straight_distance: 0.21` in
+`cusp_straightener`'s params; `smoother_plugins: ["cusp_straightener"]` and both `<SmoothPath>`
+BT calls stay active.
+
+## 2026-08-25 - MPPI freeze at path cusps in tight spaces: diagnosed, one fix attempt reverted
+
+User reported nav2 in tight real-hardware spaces producing a "chaotic curve/reverse-curve/curve"
+maneuver when a goal required turning around. Reproduced in sim by adding a narrow (~2.4m) dead-end
+corridor to the SLAM map (`qcar_map_sim.yaml`, re-mapped) and sending a goal deep inside it with a
+reversed final heading. Built `log_goal.py` (scratch, not committed) to log `/plan` and `/odom` to
+CSV for a NavigateToPose goal, and a direction-reversal detector to count cusps in each.
+
+**Diagnosis**: the *planner* (`SmacPlannerHybrid`) is fine - the logged `/plan` had exactly one
+clean cusp for this corridor goal. The *executed* `/odom` trajectory showed the robot frozen
+(creeping only a few cm) for ~34s, then another ~29s, right at the cusp point, before finally
+breaking through - not a planning problem, an MPPI execution-side freeze at the cusp transition.
+Read `nav2_mppi_controller`'s actual `path_handler.cpp` source (humble branch, fetched from
+GitHub): MPPI only sees the plan truncated up to the cusp pose until `isWithinInversionTolerances()`
+passes, which requires the robot to be within `inversion_xy_tolerance`/`inversion_yaw_tolerance` of
+that pose *simultaneously* - structurally the same "must precisely reach a pose requiring a big
+heading change" situation that caused the separate, already-documented final-goal reorientation
+freeze (fixed there via `GoalAngleCritic.cost_weight` 3.0->10.0), but with no equivalent fix ever
+applied to the cusp-transition case.
+
+**Fix attempted, reverted**: widened `inversion_xy_tolerance`/`inversion_yaw_tolerance` from the
+stock 0.2/0.4 to 0.4/0.7, on the theory that loosening the pose-lock would let MPPI advance past
+the cusp sooner. Live-tested (same logged corridor goal): **worse**, not better - the single freeze
+at the cusp was replaced by 6+ `controller_server: Failed to make progress` / progress_checker
+aborts starting well before the robot even reached the cusp, with `/odom` showing it oscillating
+over a wider area without net progress. Reverted both values to the stock 0.2/0.4. The underlying
+diagnosis may still be right, but this specific fix wasn't - see `nav2_params.yaml`'s
+`inversion_xy_tolerance` comment for the full note on what NOT to re-try without independently
+testing each value and logging (not just watching) each candidate.
+
+**Second fix attempted, also reverted**: user proposed replanning as soon as the robot is detected
+stationary rather than on a fixed timer (distinct from - and not the same failure mode as - the
+already-reverted "replan every N seconds unconditionally" from 2026-07-15/07-19, since this is
+gated on actually being stuck). Tested the cheap version: lowered
+`controller_server.progress_checker.movement_time_allowance` from 30.0 to 8.0s, to make the
+existing stuck-detection -> outer-recovery-loop -> fresh-replan chain trigger ~4x sooner. Also
+worse: `Failed to make progress` fired every ~8-13s as designed, but cycling through recovery this
+much more often meant the round-robin's `BackUp` action itself failed at least once ("backup
+failed", plausibly no clear room for a 0.3m backup in this ~2.4m corridor) - something never seen
+at the stock 30s setting. Never succeeded within a 110s test window. Reverted to 30.0.
+
+Taken together, both same-day fix attempts - one loosening the cusp-arrival pose lock, one
+shortening the stuck-detection window - made the corridor case worse, not better, despite
+targeting the freeze from different angles. Circumstantial evidence the freeze needs real,
+uninterrupted time to self-resolve (the untouched 30s/stock-tolerance baseline DID eventually
+succeed, ~34s+~29s freeze then done) - interrupting or shortcutting it, however triggered, seems
+to prevent whatever convergence is actually happening from completing, rather than speeding it up.
+Next investigation should look at why interruption itself seems harmful, not just at detecting or
+escaping the freeze faster.
+
+**Third fix attempted, also reverted**: user identified a distinct, real mechanism separate from
+cusp count or steering calibration - a front-steered vehicle's steered wheels are the
+self-correcting LEADING axle driving forward but the jackknife-prone TRAILING axle in reverse
+(same reason backing up a car, or pushing a shopping cart backward by its front casters, is
+inherently harder to track than pulling/driving forward). User proposed a real driving technique
+for this: back up roughly straight first to establish stable directional tracking, then ease into
+the curve, rather than starting to curve immediately from a standing start in reverse. Checked
+`SmacPlannerHybrid`'s actual `SearchInfo` struct (nav2_smac_planner source) for an existing
+"minimum straight run after a cusp" parameter - none exists. Implemented as a new custom
+`nav2_core::Smoother` plugin, `CuspStraightenerSmoother`
+(`src/smoothers/cusp_straightener_smoother.cpp` + `.hpp`, `qcar_smoothers.xml`, wired via
+`smoother_server` + a new `<SmoothPath>` BT call after every `ComputePathToPose`): detects cusps
+in the planned path and re-projects the next `straight_distance` (default 0.21m, ~half this
+vehicle's length) of arc length after each one onto a straight line continuing the cusp pose's
+heading, before letting the original curve resume.
+
+Live-tested (same logged corridor goal): **worse** again - took even longer to resolve than the
+untouched baseline, still unresolved at the end of a 108s test window. Directly verified the
+plugin's own logic against the real logged cusp (via a standalone script calling the
+`smooth_path` action directly) and confirmed it works exactly as designed - the mechanism itself
+isn't buggy. Working theory for why it still made things worse: it introduces a new sharp kink
+where the straightened segment rejoins the original curve, and the vehicle is still in the same
+unstable trailing-axle reverse configuration when it hits that new discontinuity - delaying the
+hard transition rather than removing it. Reverted `smoother_server`'s active plugin to
+`simple_smoother` (itself still unused/dead config, unchanged from before) and removed the
+`<SmoothPath>` BT calls; the `CuspStraightenerSmoother` plugin code is left in place
+(`qcar_smoothers.xml`/CMakeLists/package.xml all still build it) in case a future gradual-blend
+version is worth trying instead of the abrupt kink this version used.
+
+Three same-day fix attempts now, targeting the freeze from three different angles (looser
+cusp-arrival tolerance, faster stuck-detection, straightening the reverse approach) - all three
+made the reproduction case worse, none better than the untouched baseline. Strengthens the
+existing hypothesis that the freeze needs real, uninterrupted time/space to resolve and that
+active intervention - of several different kinds tried so far - tends to interfere with whatever
+is actually happening rather than help it.
+
+## 2026-08-25 - Steering GAIN calibration added, not just zero-point trim
+
+`STEERING_TRIM` alone only ever corrected the zero-point offset (wheels not pointing straight at
+a 0 command). Real hardware behavior "not turning as well as sim" traced to a second, separate
+error: a genuine steering GAIN excess - the real wheel turns further than the kinematic model's
+commanded angle implies for any nonzero command, not just at zero. Calibrated empirically (no
+factory steering conversion curve exists in the Quanser manuals or HAL source - checked directly)
+via a clean 7-point 1m-arc sweep on 2026-08-25: `implied_real_angle = 1.39*cmd + 0.119`, R²=0.977.
+An earlier 2026-08-24 attempt at this same investigation produced apparently contradictory
+"nonlinear/asymmetric" results - retracted, caused by a nut physically caught under a wheel and a
+near-depleted battery (0.3 m/s sitting right at the current static-friction floor), not a real
+steering property. See `qcar_steering_gain_nonlinearity_investigation` project memory for the full
+history.
+
+`STEERING_TRIM` updated from `-0.08` to `-0.09` (anchored to a direct "dead straight" measurement
+at that exact value), then refined to **`-0.087`** via 3 repeated trials each at -0.08/-0.085/-0.09
+to average out human placement/measurement noise. New `STEERING_GAIN = 1.39` added; `apply_trim()`
+now divides by it before adding the trim, so `car.write()` receives a command that produces the
+actually-intended real wheel angle instead of just `kinematic_steering + a flat offset`.
+`compute_steering()` and odometry remain untouched (still use the true kinematic angle), per the
+existing documented constraint that trim/gain correction must stay downstream of anything that
+cares about the real physical angle.
+
+End-to-end validation (kinematic +0.15 rad, 1m arc @ 0.4 m/s): residual error between intended and
+measured-real steering angle dropped from ~39% (no correction) to ~5.6% (`STEERING_GAIN=1.39`,
+`STEERING_TRIM=-0.087`).
+
+## 2026-08-24 - Nav2 sim goals silently no-op: use_sim_time hardcoded false in qcar_nav2.launch.py
+
+Running `qcar_nav2.launch.py launch_sim:=true` accepted RViz goals and immediately reported
+"Goal succeeded" without the robot ever moving. `controller_server` logged
+`Transform data too old when converting from map to odom` with a ~700,000s gap between the
+data timestamp (wall-clock epoch, e.g. `1787571765s`) and the transform timestamp (sim time,
+e.g. `756s`) - the nav2 stack was on wall clock while Gazebo/robot_state_publisher/controllers
+were on sim clock (per `qcar_updated.launch.py`'s `use_sim_time: True`), so tf lookups failed
+and the controller aborted instantly on every goal.
+
+**Root cause**: `qcar_nav2.launch.py` passed `'use_sim_time': 'False'` unconditionally to
+`nav2_bringup`'s `bringup_launch.py`, regardless of the `launch_sim` argument.
+
+**Fix**: pass `launch_sim` itself as the `use_sim_time` launch argument, so it tracks whether
+Gazebo is actually running.
+
+Same hardcoded-`use_sim_time: False` bug also existed in both Cartographer nodes in
+`qcar_slam.launch.py`, unrelated to `launch_sim` - fixed the same way (tied to `launch_sim`).
+
+## 2026-08-24 - Split hardware/sim maps
+
+`qcar_map.yaml` was built from real-hardware Cartographer SLAM but was being used unconditionally
+by `qcar_nav2.launch.py` for both real hardware and Gazebo sim (`myworld.world`) runs, even though
+the two environments have different geometry - AMCL localization against the wrong map would be
+broken/nonsensical in sim regardless of the `use_sim_time` fix above.
+
+Renamed `maps/qcar_map.yaml`/`.pgm` -> `maps/qcar_map_hardware.yaml`/`.pgm`. `qcar_nav2.launch.py`
+now picks `maps/qcar_map_sim.yaml` or `maps/qcar_map_hardware.yaml` based on the `launch_sim`
+argument. `qcar_map_sim.yaml` still needs to be generated (via `qcar_slam.launch.py
+launch_sim:=true` + teleop in Gazebo, then `map_saver_cli`) before sim nav2 runs will work.
+
 ## 2026-08-18 - Stop-latency/stiction-delay root cause found: QCar HAL readMode=1 buffering bug, RESOLVED
 
 **Resolves the 2026-08-17 investigation below.** The ~2.0-2.1s "stiction delay" and ~2.4-2.55s "stop
