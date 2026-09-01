@@ -75,30 +75,73 @@ WHEELBASE = 0.25725
 # from the vehicle's physical max steering angle (0.5236 rad / 30 deg).
 MAX_STEER_CMD = 0.5
 
-# Compensates for this vehicle's steering mechanical center being offset
-# from steering=0.0 (wheels sit visibly left of straight when commanded to
-# 0 - confirmed on hardware 2026-08-03/06). No adjustable physical linkage
-# is available on this chassis, so corrected in software instead.
+# Compensates for two independent, real effects: (1) this vehicle's
+# steering mechanical center being offset from steering=0.0 (wheels sit
+# visibly left of straight when commanded to 0), and (2) a real steering
+# GAIN error - the physical wheel turns more than the commanded angle for
+# any nonzero command, not just a zero-point offset. No adjustable
+# physical linkage is available on this chassis and no factory steering
+# calibration curve is documented anywhere in the Quanser manuals (only
+# the raw servo command range, -0.5 to 0.5 rad, and the physical max wheel
+# angle, +/-0.5236 rad - checked user_manual_system_hardware.pdf and the
+# QCar HAL source directly; the HAL's own steeringBias parameter is left
+# at its default 0 in this file's QCar() construction, so nothing at the
+# firmware level is fighting this software correction), so both are
+# corrected in software instead, calibrated empirically like
+# THROTTLE_GAIN/THROTTLE_DEADBAND below.
 #
-# Calibrated iteratively on hardware, 2026-08-06, first via an interactive
-# static test (motor off, held candidate angles, visually judged against
-# straight - -0.05 too left, -0.09 "almost correct"), then refined via a
-# sequence of real straight-line driving tests (drive N meters at
-# angular.z=0, measure actual lateral offset). Distance-based measurement
-# is far more precise than eyeballing a stationary wheel angle - prefer it
-# for any further refinement. History (some noise expected - offset also
-# depends on how precisely the vehicle was aimed at the start of each
-# test, not purely the trim value):
-#   trim     distance   offset        direction needed
-#   -0.09     4.5m      0.1m right    less negative (toward 0)
-#   -0.0678   ?         drifted left  more negative (overshot the above)
-#   -0.085    5.3m      0.2m right    less negative
-#   -0.08     ~4.4m      no visible drift reported - ACCEPTED
-# Accepted as "almost accurate" (user's call, 2026-08-06), not a perfect
-# zero - if drift reappears or matters more for a future use case (e.g.
-# tighter Nav2 tolerances), re-run the driving-test procedure above rather
-# than adjusting from static/visual judgment alone.
-STEERING_TRIM = -0.08
+# 2026-08-06: STEERING_TRIM alone (no gain term) iteratively calibrated -
+# first an interactive static test (motor off, held candidate angles,
+# visually judged against straight), then refined via real straight-line
+# driving tests (drive N meters at angular.z=0, measure actual lateral
+# offset). -0.08 accepted that day as "almost accurate", no gain term
+# considered/tested yet.
+#
+# 2026-08-24/25: revisited after the vehicle appeared to turn less
+# accurately on hardware than in sim. -0.08 no longer held (drift had
+# grown to ~18cm over just 1m, not the ~cm-level residual expected) -
+# initial re-investigation was badly confounded by a nut physically caught
+# under a wheel and a near-depleted battery (0.3 m/s command was sitting
+# right at/below the current static-friction floor - see THROTTLE_GAIN
+# history below for the same stiction-floor phenomenon), producing
+# apparent stalls/nonlinearity that were artifacts, not real steering
+# behavior - see qcar_steering_gain_nonlinearity_investigation project
+# memory for the full retracted dataset, kept for the record but not to be
+# reused. Clean re-test 2026-08-25 (nut removed, fresh battery, 0.4 m/s
+# for stiction headroom, user re-aiming to a fixed start position/heading
+# every run) via a 7-point 1m-arc sweep, each point back-solved for the
+# real wheel angle implied by the measured lateral deviation:
+#   cmd (rad)   measured      implied real angle (rad)
+#   0.00        21.5cm L      +0.112
+#   -0.05       10cm L        +0.052
+#   -0.08       3.5cm L       +0.018
+#   -0.085      1cm L         +0.005
+#   -0.09       dead straight  0.000
+#   -0.10       4cm R         -0.021
+#   -0.12       12cm R        -0.062
+# Clean, monotonic, no stalls/sign-flips/asymmetry - unlike the retracted
+# 2026-08-24 data. Least-squares fit: implied = 1.39*cmd + 0.119, R²=0.977
+# (the two largest-magnitude points sit slightly above the line - mild
+# hint of extra curvature out there, not investigated further). Zero-point
+# anchored to the direct -0.09 "dead straight" measurement (more precise
+# than the regression's own intercept-derived zero-crossing, -0.0857,
+# since the largest-magnitude points pull that estimate off slightly) -
+# see apply_trim() below for how STEERING_GAIN and STEERING_TRIM combine.
+# If drift or turning inaccuracy reappears, re-run this exact sweep
+# (script: steering_angle_test.py, currently only in a scratch location,
+# not committed to the repo - recreate from the project memory above if
+# needed) rather than adjusting from a single straight-line test alone,
+# since a single test can't distinguish a gain error from an offset error.
+#
+# Trim refined same day (2026-08-25) via 3 repeated trials each at -0.08,
+# -0.085, -0.09 to average out human placement/measurement noise:
+#   -0.08: 3.3, 3.2, 0.5 cm L (avg 2.33 L) | -0.085: 0, 0, 1 cm L (avg 0.33 L)
+#   -0.09: 1, 0.5, 1 cm R (avg 0.83 R)
+# Zero-crossing of the averaged points: -0.087 (this narrow a span isn't
+# enough data to also re-fit STEERING_GAIN - kept at 1.39 from the wider
+# sweep above).
+STEERING_GAIN = 1.39
+STEERING_TRIM = -0.087
 
 # PWM duty-cycle safety limits (documents/user_manual_troubleshooting.pdf):
 # saturate to +/-30% magnitude, rate-limited to 100% duty-cycle change per
@@ -200,8 +243,11 @@ def apply_trim(kinematic_steering):
     '''Converts a real/kinematic steering angle into the servo command that
     actually achieves it on this specific vehicle - only call this right
     before car.write(), never before odometry or anything else that cares
-    about the real physical wheel angle.'''
-    return max(-MAX_STEER_CMD, min(MAX_STEER_CMD, kinematic_steering + STEERING_TRIM))
+    about the real physical wheel angle. Inverts the measured
+    implied_real_angle = STEERING_GAIN*cmd + (real angle at cmd=0) relationship
+    by pre-dividing by the gain, so the real wheel ends up at
+    kinematic_steering, not just at kinematic_steering + a flat offset.'''
+    return max(-MAX_STEER_CMD, min(MAX_STEER_CMD, kinematic_steering / STEERING_GAIN + STEERING_TRIM))
 
 
 class Odometry:

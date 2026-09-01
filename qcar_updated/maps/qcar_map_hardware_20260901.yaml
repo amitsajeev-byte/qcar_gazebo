@@ -1,4 +1,4 @@
-image: qcar_map_hardware.pgm
+image: qcar_map_hardware_20260901.pgm
 mode: trinary
 resolution: 0.05
 origin: [-2.45, -3.5, 0]

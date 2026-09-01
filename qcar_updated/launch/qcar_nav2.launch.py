@@ -5,14 +5,14 @@ from launch.actions import IncludeLaunchDescription, DeclareLaunchArgument
 from launch.actions import TimerAction
 from launch.conditions import IfCondition, UnlessCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import LaunchConfiguration
+from launch.substitutions import LaunchConfiguration, PythonExpression
 from nav2_common.launch import RewrittenYaml
 
 
 def generate_launch_description():
     pkg = get_package_share_directory('qcar_updated')
     nav2_bringup_dir = get_package_share_directory('nav2_bringup')
-    map_file = os.path.join(pkg, 'maps', 'qcar_map.yaml')
+    maps_dir = os.path.join(pkg, 'maps')
     nav2_params = os.path.join(pkg, 'config', 'nav2', 'nav2_params.yaml')
     bt_dir = os.path.join(pkg, 'config', 'nav2', 'behavior_trees')
 
@@ -32,12 +32,29 @@ def generate_launch_description():
     )
 
     launch_sim = LaunchConfiguration('launch_sim')
+    map_override = LaunchConfiguration('map_override')
+    # map_override: run sim against a hardware-captured map (or vice versa) for side-by-side
+    # comparison, bypassing the normal sim/hardware map selection below. Empty (default) keeps
+    # the normal behavior.
+    map_file = PythonExpression([
+        "'", map_override, "' if '", map_override, "' != '' else ('",
+        os.path.join(maps_dir, 'qcar_map_sim.yaml'),
+        "' if '", launch_sim, "' == 'true' else '",
+        os.path.join(maps_dir, 'qcar_map_hardware.yaml'), "')"
+    ])
 
     return LaunchDescription([
         DeclareLaunchArgument(
             'launch_sim',
             default_value='false',
             description='Bring up Gazebo + robot_state_publisher + controllers as well'
+        ),
+
+        DeclareLaunchArgument(
+            'map_override',
+            default_value='',
+            description='Optional map yaml path to use instead of the normal sim/hardware pick '
+                        '- e.g. run sim against a hardware-captured map for comparison'
         ),
 
         IncludeLaunchDescription(
@@ -65,7 +82,7 @@ def generate_launch_description():
                         os.path.join(nav2_bringup_dir, 'launch', 'bringup_launch.py')
                     ),
                     launch_arguments={
-                        'use_sim_time': 'False',
+                        'use_sim_time': launch_sim,
                         'params_file': configured_nav2_params,
                         'map': map_file
                     }.items()

@@ -3,5 +3,8 @@
     <class type="mppi::critics::EarlyCommitCritic" base_class_type="mppi::critics::CriticFunction">
       <description>Unconditional early-trajectory heading critic - commits to the path's near-term curvature from the very first control cycle, without the gating conditions nav2's own PathAngleCritic/ConstraintCritic apply. See CHANGELOG.md 2026-07-18 (9).</description>
     </class>
+    <class type="mppi::critics::PathDeviationCritic" base_class_type="mppi::critics::CriticFunction">
+      <description>Once the robot deviates from the path beyond deviation_threshold, pulls trajectories toward a point further along the path instead of insisting on an exact rejoin. Inactive (zero cost) while on-track. See CHANGELOG.md 2026-08-26.</description>
+    </class>
   </library>
 </class_libraries>

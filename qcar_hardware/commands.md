@@ -6,7 +6,7 @@ down the real-hardware QCar stack. Active testing currently happens in
 `README.md`/`CHANGELOG.md` for why. Commands below target `qcar_updated`;
 swap the package name if working in `qcar_hardware` instead.
 
-QCar IP may change per DHCP session - `192.168.123.16` below is this
+QCar IP may change per DHCP session - `192.168.123.14` below is this
 session's address, confirm before use (`ping <ip>` or check the QCar's own
 network settings if connection fails).
 
@@ -19,13 +19,13 @@ source /opt/ros/humble/setup.bash
 source ~/humble_ws/install/setup.bash
 
 # push onboard bridge files to the QCar - only needed if qcar_onboard/*.py changed
-scp ~/humble_ws/src/qcar_updated/qcar_onboard/*.py nvidia@192.168.123.16:~/ros2_amit/src/onboard_bridge/
+scp ~/humble_ws/src/qcar_updated/qcar_onboard/*.py nvidia@192.168.123.14:~/ros2_amit/src/onboard_bridge/
 ```
 
 ## Terminal 1 (QCar motor bridge - needs sudo for PYTHONPATH + hardware access)
 
 ```bash
-ssh nvidia@192.168.123.16
+ssh nvidia@192.168.123.14
 sudo -E env PYTHONPATH=/home/nvidia/Documents/python python3 ~/ros2_amit/src/onboard_bridge/qcar_bridge.py
 ```
 (sudo password: `nvidia`)
@@ -33,7 +33,7 @@ sudo -E env PYTHONPATH=/home/nvidia/Documents/python python3 ~/ros2_amit/src/onb
 ## Terminal 2 (QCar LiDAR node - no sudo needed)
 
 ```bash
-ssh nvidia@192.168.123.16
+ssh nvidia@192.168.123.14
 PYTHONPATH=/home/nvidia/Documents/python python3 ~/ros2_amit/src/onboard_bridge/qcar_lidar_node.py
 ```
 
@@ -41,7 +41,7 @@ PYTHONPATH=/home/nvidia/Documents/python python3 ~/ros2_amit/src/onboard_bridge/
 
 ```bash
 for i in 1 2 3 4 5; do
-  t1=$(date +%s.%N); remote=$(ssh nvidia@192.168.123.16 'date +%s.%N'); t2=$(date +%s.%N)
+  t1=$(date +%s.%N); remote=$(ssh nvidia@192.168.123.14 'date +%s.%N'); t2=$(date +%s.%N)
   python3 -c "print(($remote) - (($t1 + $t2) / 2))"
 done
 ```
@@ -54,7 +54,7 @@ redo it) and use in place of `0.50` below.
 source /opt/ros/humble/setup.bash
 source ~/humble_ws/install/setup.bash
 export ROS_DOMAIN_ID=77
-ros2 run qcar_updated qcar_relay_node.py --ros-args -p qcar_ip:=192.168.123.16 -p qcar_clock_offset:=0.50
+ros2 run qcar_updated qcar_relay_node.py --ros-args -p qcar_ip:=192.168.123.14 -p qcar_clock_offset:=0.50
 ```
 
 ## Terminal 4 (dev PC) - SLAM (real hardware path, no Gazebo)
@@ -118,7 +118,7 @@ ros2 run tf2_ros tf2_echo base lidar
 # dev PC: Ctrl+C teleop / nav2 launch / relay node, in that order
 
 # QCar side:
-ssh nvidia@192.168.123.16 'pkill -f qcar_lidar_node.py'
-ssh nvidia@192.168.123.16 'echo nvidia | sudo -S pkill -f qcar_bridge.py'
-ssh nvidia@192.168.123.16 'sudo ss -tlnp | grep -E "5555|5556"'   # should print nothing
+ssh nvidia@192.168.123.14 'pkill -f qcar_lidar_node.py'
+ssh nvidia@192.168.123.14 'echo nvidia | sudo -S pkill -f qcar_bridge.py'
+ssh nvidia@192.168.123.14 'sudo ss -tlnp | grep -E "5555|5556"'   # should print nothing
 ```

@@ -1,3 +1,9 @@
+# DERIVED FILE - not the tuned live config. Full copy of nav2_params.yaml, used only by
+# qcar_nav2_kinematic_compare.launch.py (no-Gazebo sim-vs-hardware-map comparison mode). The only
+# intentional diff from nav2_params.yaml is local_costmap gaining a static_layer (see below) -
+# amcl's blocks here are unused in that launch (a static map->odom TF stands in for it), left
+# in place only because this is a full-file copy. Keep in sync with nav2_params.yaml manually if
+# tuning values change - do not treat this as a second source of truth.
 amcl:
   ros__parameters:
     set_initial_pose: true
@@ -511,7 +517,13 @@ local_costmap:
       # the car's real front/rear overhangs. See TUNING.md "Known mismatches" and CHANGELOG.md
       # 2026-07-14 (11).
       footprint: "[[0.22, 0.09], [0.22, -0.09], [-0.22, -0.09], [-0.22, 0.09]]"
-      plugins: ["voxel_layer", "inflation_layer"]
+      # static_layer added (only in this nav2_params_compare.yaml copy, not the live tuned
+      # config) so MPPI's local obstacle avoidance still reacts to the real map's walls even
+      # without a live scan matching them - see qcar_nav2_kinematic_compare.launch.py.
+      plugins: ["static_layer", "voxel_layer", "inflation_layer"]
+      static_layer:
+        plugin: "nav2_costmap_2d::StaticLayer"
+        map_subscribe_transient_local: true
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
         cost_scaling_factor: 3.0

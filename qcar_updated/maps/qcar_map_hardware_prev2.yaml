@@ -1,7 +1,7 @@
-image: qcar_map_hardware.pgm
+image: qcar_map_hardware_prev2.pgm
 mode: trinary
 resolution: 0.05
-origin: [-2.45, -3.5, 0]
+origin: [-2.44, -5.71, 0]
 negate: 0
 occupied_thresh: 0.65
 free_thresh: 0.25

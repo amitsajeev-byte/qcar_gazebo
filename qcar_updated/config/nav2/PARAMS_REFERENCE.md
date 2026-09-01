@@ -1,5 +1,12 @@
 # `nav2_params.yaml` parameter reference
 
+*Last comprehensively checked against the live yaml/BT XML: 2026-08-31. Individual entries carry
+their own dates - if one looks old, verify its value against the yaml directly. This pass found
+`smoother_server` entirely rewritten around it (was still describing `simple_smoother` as active
+long after `cusp_straightener` replaced it), a wrong claim that stock default BT trees are in use
+(the launch file overrides them with a custom one), stale `PathFollowCritic`/`PathAngleCritic`
+offsets, and a stale `recovery_alpha_fast`/`recovery_alpha_slow` - previous update: 2026-07-20.*
+
 Per-parameter explanation of every value in `nav2_params.yaml`, organized by the same top-level
 sections as the YAML file. For which of these are worth adjusting to improve navigation
 accuracy specifically, see `../../TUNING.md` instead - this doc is a full reference, not a
@@ -42,11 +49,12 @@ tuning guide.
   (95% confidence that estimated distribution error is within 5% - together these set the
   confidence bound used to decide how many particles are actually needed each cycle, between
   `min_particles` and `max_particles`).
-- `recovery_alpha_fast: 0.0` / `recovery_alpha_slow: 0.0` - weights for AMCL's automatic
+- `recovery_alpha_fast: 0.1` / `recovery_alpha_slow: 0.001` - weights for AMCL's automatic
   "kidnapped robot" recovery (injecting random particles when average particle weight drops
-  suddenly). Disabled here (both 0) - if the robot ever gets picked up/teleported in map frame,
-  AMCL won't self-recover; you'd need to send `/reinitialize_global_localization` or a manual
-  pose estimate.
+  suddenly, relative to a fast vs. slow moving average of that weight). Nonzero here (nav2's own
+  defaults) - if the robot's tracked pose drifts badly wrong, AMCL will inject some random
+  particles to try to recover on its own rather than needing a manual
+  `/reinitialize_global_localization` call or pose estimate.
 - `resample_interval: 1` - resample the particle filter every N updates (1 = every update).
 - `robot_model_type: "nav2_amcl::DifferentialMotionModel"` - correct as-is for this Ackermann
   car; see `TUNING.md` §5 for the full reasoning (both shipped AMCL motion models take the same
@@ -83,11 +91,25 @@ tuning guide.
   (e.g. clear costmap).
 - `navigate_to_pose` / `navigate_through_poses` - which navigator plugin handles each action type
   (both are the stock Nav2 ones here).
+- `default_nav_to_pose_bt_xml: ""` / `default_nav_through_poses_bt_xml: ""` - left blank in this
+  file, but **not actually using nav2's stock default trees**: `launch/qcar_nav2.launch.py`
+  overrides `default_bt_xml_filename` at launch time to point at this package's own
+  `config/nav2/behavior_trees/navigate_to_pose_w_replanning_and_recovery.xml` - a custom tree
+  (replan-only-if-invalid instead of blind periodic replanning, `SmoothPath` calls added for the
+  `cusp_straightener` smoother, `<Spin>` removed from recovery actions since it's physically
+  impossible for this Ackermann vehicle at zero linear velocity). See that XML's own header
+  comment and `TUNING.md` §2/§2a for the full history - this file alone won't show you which tree
+  is actually running.
 - `plugin_lib_names` - the full catalog of behavior-tree leaf-node plugins made available to
-  whatever BT XML file is loaded (default trees, since no custom XML is configured here). Each
-  entry registers one BT node type (e.g. `nav2_spin_action_bt_node` = the `<Spin>` leaf,
+  whatever BT XML file is loaded (the custom tree above, not the stock default). Each entry
+  registers one BT node type (e.g. `nav2_spin_action_bt_node` = the `<Spin>` leaf,
   `nav2_recovery_node_bt_node` = the `<RecoveryNode>` control node). Not individually tunable -
-  they just need to match whatever nodes your BT XML actually references.
+  they just need to match whatever nodes your BT XML actually references. Includes
+  `nav2_smooth_path_action_bt_node` (added 2026-08-25, needed for the `<SmoothPath>` calls to
+  `cusp_straightener` above). A custom `qcar_bt_nodes` library (`IsPathValidDebounced`, a
+  debounced replacement for stock `IsPathValid`) was added and then reverted 2026-08-26 - code
+  still exists (`src/bt/is_path_valid_debounced_condition.cpp`) but is **not** currently in this
+  list or referenced by the active XML; see `TUNING.md` §2 before re-enabling.
 
 ## `controller_server` (local path-following)
 
@@ -220,15 +242,18 @@ tuning guide.
     being enforced before goal-focused critics take over. Does **not** fix the reorientation-in-
     place bug above - confirmed via live testing this has zero effect there, since that bug's gate
     is already ~0 regardless of the threshold's value.
-  - `PathFollowCritic.offset_from_furthest: 3` (lowered from the default `6`) - this critic pulls
-    each sampled trajectory's endpoint toward the path point this many indices ahead of current
-    progress; too far ahead can land past the start of an upcoming curve, pulling the executed
-    heading toward that curve before the robot has physically reached it (reported live as
-    "turning early").
-  - `PathAngleCritic.offset_from_furthest: 2` (lowered from the default `4`) - same reasoning and
-    mechanism as `PathFollowCritic` above, but for heading rather than position: steers the
-    robot's heading toward the path point this many indices ahead, the more direct cause of
-    visibly "turning early" into a curve.
+  - `PathFollowCritic.offset_from_furthest: 6` / `PathAngleCritic.offset_from_furthest: 4`
+    (the stock defaults, live as of 2026-08-31). This critic pulls each sampled trajectory's
+    endpoint (`PathFollowCritic`) or heading (`PathAngleCritic`) toward the path point this many
+    indices ahead of current progress; too far ahead can land past the start of an upcoming
+    curve, pulling execution toward that curve before the robot has physically reached it
+    (reported live as "turning early"). Both were lowered to `3`/`2` on 2026-07-18 (2) to fix
+    exactly that, then re-tested 2026-08-02 against the defaults and a much wider `36`/`24` on a
+    different, harder goal - "no meaningful change at either value" there. **No changelog entry
+    documents reverting back to the defaults** - this is a real, currently-unexplained
+    discrepancy from the 2026-07-18 (2) value, not a confirmed deliberate decision. See
+    `TUNING.md` §2 for the same flag; re-verify against the original "turning early" symptom
+    before trusting either value.
   - `PathAlignCritic.offset_from_furthest: 3` (lowered from the default `20` on 2026-07-18 (3)) -
     works differently here than in `PathFollowCritic`/`PathAngleCritic` above: it's a gate, not a
     look-ahead target (`if (path_segments_count < offset_from_furthest_) return;`), so
@@ -247,13 +272,44 @@ tuning guide.
     the default swung wider still than either), indicating run-to-run MPPI sampling variance at
     this wider noise setting, not this weight, dominates the outcome. See `CHANGELOG.md`
     2026-07-19 (3).
+  - `PathDeviationCritic` (custom, `src/critics/path_deviation_critic.cpp`, config block present
+    but **not** in the active `critics:` list above) - implemented and trial-tested 2026-08-26,
+    the "don't insist on an exact path rejoin when deviated, aim further ahead instead" idea.
+    Regressed timing (mean 74.3s vs. the active config's 43.9s, much wider variance across
+    3 trials each) - reverted, code kept deselected. See `CHANGELOG.md` 2026-08-26.
 
 ## `smoother_server`
 
-- `smoother_plugins: ["simple_smoother"]`, `SimpleSmoother`: `tolerance: 1.0e-10` (convergence
-  threshold - how small a change counts as "smoothing done"), `max_its: 1000` (iteration cap),
-  `do_refinement: true` (runs an extra pass to reduce residual curvature/kinks). Post-processes
-  the raw grid-planner path into something less jagged before handing it to the controller.
+**Rewritten 2026-08-31 - this section was completely stale.** `smoother_plugins` no longer names
+`simple_smoother` - the active plugin is a custom one, `cusp_straightener`, added 2026-08-25/26.
+
+- `smoother_plugins: ["cusp_straightener"]`, `qcar_updated::smoothers::CuspStraightenerSmoother`
+  (`src/smoothers/cusp_straightener_smoother.cpp`) - not a stock nav2 plugin, this package's own.
+  Fixes the mid-route-cusp MPPI freeze (see `TUNING.md` §2/§2a) by reshaping the planned path
+  *before* MPPI ever sees it, at each REVERSE-entering cusp (a front-steered vehicle's steered
+  wheels are the self-correcting leading axle going forward but the jackknife-prone trailing axle
+  in reverse - curving immediately from a standing start in reverse was the actual root cause,
+  not cusp count or steering calibration, both tested and ruled out first): `straight_distance:
+  0.21` m (re-projects this much arc length onto a straight line continuing the cusp's heading,
+  blending back to the original curve over the same distance), `extend_distance: 0.15` m (also
+  pushes the cusp point itself this far further before the straight run starts, so the incoming
+  and outgoing legs overlap instead of meeting at one precise vertex, widening MPPI's own
+  cusp-arrival tolerance target - as of 2026-08-29 this extends along the incoming path's own
+  curvature, estimated over a ~0.15m lookback window, rather than a hard straight line; a first
+  attempt using only the single adjacent segment was dominated by the planner's
+  `angle_quantization_bins: 72` quantization noise, producing an unrealistically tight extension
+  that made the robot deviate off-path and get stuck - fixed by widening the lookback window),
+  `min_lead_distance: 0.3` m (added 2026-08-29 - skips the extend+straighten treatment once a
+  replanned cusp is closer than this to the robot's current position, since a replanned path
+  starts at the robot's live pose and the same physical cusp otherwise keeps getting re-extended
+  on every replan while the robot is still approaching/already executing it). Full history:
+  `CHANGELOG.md` 2026-08-25/26/29 and the `qcar_updated_mppi_cusp_freeze_investigation` memory.
+- `simple_smoother`, `SimpleSmoother`: `tolerance: 1.0e-10` (convergence threshold - how small a
+  change counts as "smoothing done"), `max_its: 1000` (iteration cap), `do_refinement: true`
+  (runs an extra pass to reduce residual curvature/kinks). **Not currently wired into the BT** -
+  no `<SmoothPath>` call references it (`cusp_straightener` above has that role now) - dead
+  config, kept per this project's own "don't remove dead config without a reason" convention (see
+  the `qcar_updated_dont_proactively_cleanup_dead_config` memory).
 
 ## `planner_server` (global path planning)
 
@@ -263,8 +319,18 @@ tuning guide.
   2026-07-14 - see `CHANGELOG.md`): a search-based planner that's kinematically aware of this
   Ackermann car's turning-radius limit. `downsample_costmap: false` / `downsampling_factor: 1` (no
   costmap downsampling - fine at this map's small size, would trade search speed for resolution
-  on a larger map), `tolerance: 0.5` m (same meaning as before), `allow_unknown: true` (same),
-  `max_iterations: 1000000` / `max_on_approach_iterations: 1000` (search effort caps),
+  on a larger map), `tolerance: 0.5` m (if the exact goal is infeasible - e.g. a footprint-valid
+  pose doesn't exist there, too close to a wall - the search backtracks to the closest reachable
+  node within this distance instead of failing outright, confirmed against the real
+  `nav2_smac_planner` search loop, not guessed. Tried at `1.0` on 2026-08-29 to rescue a
+  near-wall goal - it worked, but the "rescued" pose becomes the plan's actual endpoint and
+  nothing downstream rechecks it against what was actually requested, so the robot could end up
+  meaningfully off-target and still report `Goal succeeded`. **Reverted to `0.5`** - see the
+  `qcar_updated_prefer_visible_failure_over_silent_wrong_result` memory), `allow_unknown: true`
+  (unexplored map cells are treated as passable during planning),
+  `max_iterations: 1000000` / `max_on_approach_iterations: 1000` (search effort caps - confirmed
+  live 2026-08-29 that `max_iterations`, not `max_planning_time` below, is what actually gets hit
+  on a hard/infeasible goal - each failed attempt took 2.5-3.6s, well under the 5.0s time cap),
   `max_planning_time: 5.0` s (hard wall-clock cap per planning attempt),
   `motion_model_for_search: "REEDS_SHEPP"` (allows reverse/K-turn segments, matching
   `vx_min < 0` in `FollowPath` - required for this vehicle per user need. This setting has a
@@ -304,7 +370,9 @@ tuning guide.
   motion-primitive distance heuristic table), `cache_obstacle_heuristic: false` (recompute the
   obstacle heuristic fresh each planning call rather than caching between calls - safer given
   costmaps update from live sensor data), `smooth_path: true` (planner's own internal smoothing -
-  see the `smoother_server` note above, since this package's BT trees don't separately invoke it).
+  **note this is NOT the only smoothing applied anymore** as of 2026-08-25: `smoother_server`'s
+  `cusp_straightener` is now separately invoked via `<SmoothPath>` in the BT - see the
+  `smoother_server` section above).
 
 ## `local_costmap` / `global_costmap`
 
@@ -419,5 +487,7 @@ tuning guide.
 ## Worth a second look
 
 - `spin` is registered in `behavior_server.behavior_plugins` despite being physically infeasible
-  for this car - check whatever BT XML is actually active to see if it's really excluded from
-  the runtime recovery tree (this params file alone doesn't control that).
+  for this car - **resolved**: the active custom BT XML (see the `bt_navigator` section above)
+  removes `<Spin>` from its `RecoveryActions`, so it's registered but not actually invoked at
+  runtime. Still worth re-checking if the BT XML is ever swapped for something else, since
+  `behavior_server` itself doesn't prevent it from being called.
