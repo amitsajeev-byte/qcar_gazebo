@@ -149,6 +149,20 @@ STEERING_TRIM = -0.087
 THROTTLE_LIMIT = 0.3
 THROTTLE_RATE_LIMIT = 1.0  # duty-cycle fraction per second
 
+# FLAG 2026-09-02: added after a live hardware observation - during Nav2 retry/orientation-
+# correction cycles (esp. the MPPI cusp-negotiation "searching" behavior documented in the
+# qcar_updated_mppi_cusp_freeze_investigation memory), the commanded steering angle was seen
+# oscillating hard left/right, spontaneously, cycle to cycle. Unlike throttle above, steering had
+# NO rate limit at all before this - target_steering went straight from compute_steering() to
+# car.write() every ~50ms with nothing damping a full-range reversal. Repeated full-swing
+# reversals under load are a real mechanical stress risk (encoder/servo wear), independent of
+# whatever is driving the oscillation upstream (Nav2/MPPI) - this is a hardware-boundary backstop,
+# not a fix for the upstream cause. Value is a first guess (full +/-MAX_STEER_CMD swing, 1.0 rad,
+# in 0.5s) mirroring THROTTLE_RATE_LIMIT's rough time constant above - NOT yet validated on
+# hardware. Bench-test with wheels off the ground before trusting this on a real drive; if normal
+# path-following now feels sluggish/late on real turns, raise this rather than removing it.
+STEERING_RATE_LIMIT = 2.0  # rad per second
+
 # cmd_vel's linear.x is m/s; the HAL's throttle is a PWM duty-cycle fraction
 # (unitless) - there's no documented conversion between the two anywhere in
 # the Quanser manuals. The original guess (a flat THROTTLE_GAIN=1/3.0
@@ -416,6 +430,7 @@ def main():
     target_linear = 0.0
     target_steering = 0.0
     current_throttle = 0.0
+    current_steering = 0.0
     last_cmd_time = time.time()
     last_loop_time = time.time()
     period = 1.0 / READ_RATE
@@ -558,21 +573,32 @@ def main():
                     delta = max(-max_step, min(max_step, desired_throttle - current_throttle))
                     current_throttle += delta
 
+                    # STEERING_RATE_LIMIT backstop (see FLAG comment above) - same pattern as
+                    # throttle above, applied to the kinematic (untrimmed) angle so a hard
+                    # left/right flip in target_steering gets damped into a bounded sweep instead
+                    # of an instant full-range servo reversal.
+                    max_steer_step = STEERING_RATE_LIMIT * dt
+                    steer_delta = max(-max_steer_step, min(max_steer_step, target_steering - current_steering))
+                    current_steering += steer_delta
+
                     leds = [0, 0, 0, 0, 0, 0, 1, 1]
-                    if target_steering > 0.15:
+                    if current_steering > 0.15:
                         leds[0] = 1
                         leds[2] = 1
-                    elif target_steering < -0.15:
+                    elif current_steering < -0.15:
                         leds[1] = 1
                         leds[3] = 1
                     if current_throttle < 0:
                         leds[5] = 1
 
-                    car.write(current_throttle, apply_trim(target_steering), leds)
+                    car.write(current_throttle, apply_trim(current_steering), leds)
 
-                    # Odometry uses the untrimmed/kinematic angle - see
-                    # compute_steering()'s docstring for why.
-                    odom_data = odom.update(float(car.motorEncoder[0]), target_steering, dt)
+                    # Odometry uses the untrimmed/kinematic angle - see compute_steering()'s
+                    # docstring for why - and current_steering specifically (not target_steering)
+                    # now that STEERING_RATE_LIMIT above means the two can genuinely differ: using
+                    # the instantaneous target here would tell odometry the wheel turned further/
+                    # faster than what was actually sent to the servo this cycle.
+                    odom_data = odom.update(float(car.motorEncoder[0]), current_steering, dt)
                     # Capture-time timestamp, not send-time - see this file's
                     # module docstring for why this matters.
                     odom_data['t'] = time.time()
@@ -588,6 +614,7 @@ def main():
                 target_linear = 0.0
                 target_steering = 0.0
                 current_throttle = 0.0
+                current_steering = 0.0
                 car.write(0.0, apply_trim(0.0), [0, 0, 0, 0, 0, 0, 0, 0])
     except KeyboardInterrupt:
         pass

@@ -8,10 +8,21 @@
 // near-term path point, ungated by threshold_to_consider/max_angle_to_furthest, so it always
 // pushes MPPI to start turning toward the path immediately.
 //
-// Gated on path progress (active_path_points): this critic's near-term bearing target is only
-// meaningful right at the start of a path and fights the normal path/goal critics once real
-// progress has been made, so scoring stops once furthest_reached_path_point passes
-// active_path_points.
+// Gated on real distance to the near-term target (max_lead_distance), not path-point count:
+// originally gated by active_path_points (a fixed count of path points from trip start), but
+// CHANGELOG.md 2026-07-19 (5) found and only partially fixed a real bug with that approach - a
+// path that runs straight for a while before curving could still have its curve fall inside the
+// point-count window, so this critic kept reaching toward that not-yet-current curve well before
+// the robot had actually traveled there ("robot turns before the curve", live-measured up to 3x
+// the planned lateral offset; lowering the window 15->8 reduced but did not eliminate it).
+// Root-caused further 2026-09-02: a path-point count is a poor proxy for physical distance -
+// replaced with a direct Euclidean distance check against the same near-term target this critic
+// already scores against, mirroring cusp_straightener_smoother's already-proven
+// min_lead_distance pattern. This one mechanism naturally covers both cases this critic needs to
+// handle: at genuine trip start with an immediately-curving path, distance-to-target is ~0, so it
+// fires right away (same as before); further down a path where the near-term target is still
+// physically far off, it stays suppressed until the robot actually closes that distance - fixing
+// the 2026-07-19 (5) residual without needing two separate critics or an arbitrary point count.
 //
 // Direction-aware: scores against whichever of (bearing, bearing + pi) is closer rather than
 // assuming forward travel, matching nav2's own utils::posePointAngle() behavior
@@ -43,7 +54,7 @@ public:
 protected:
   size_t offset_from_furthest_{3};
   size_t early_time_steps_{10};
-  size_t active_path_points_{15};
+  float max_lead_distance_{0.3f};
   bool forward_preference_{false};
 
   unsigned int power_{1};

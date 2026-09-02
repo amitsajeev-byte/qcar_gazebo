@@ -1,5 +1,573 @@
 # Changelog
 
+## 2026-09-02 - HARDWARE VALIDATION PENDING: checklist of everything from today, sim-only so far
+
+Everything below was made and validated in **simulation only** today. None of it has run on the
+real QCar yet. User is going to the university Monday specifically to hardware-test this batch and
+revert whatever doesn't hold up. This entry is the single checklist to work from - each item lists
+what changed, where, its sim-validation status, and the exact value to restore if it needs
+reverting. Read this entry top-to-bottom before touching config on hardware day; the individual
+same-day entries below have the full reasoning for each if more context is needed.
+
+### 1. BT recovery structure - `config/nav2/behavior_trees/navigate_to_pose_w_replanning_and_recovery.xml`
+**Sim status: validated, 4/4 clean trials + the original 89s/2-failure and 57s/50.6s trials before that.**
+- `FollowPath`'s bare one-shot retry **removed** - a failure now goes straight to `RecoveryFallback`
+  instead of retrying with the same stale path first.
+  **Revert:** wrap it back in `<RecoveryNode number_of_retries="1" name="FollowPath"><FollowPath .../><ClearEntireCostmap name="ClearLocalCostmap-Context" service_name="local_costmap/clear_entirely_local_costmap"/></RecoveryNode>`.
+- `RecoveryFallback`'s `RoundRobin` collapsed from 3 tiers to 2: `ClearSettleReplan` (clear both
+  costmaps + `Wait 5s`) then `BackUp`. **Revert:** split back into 3 separate `RoundRobin` children
+  - `ClearingActions` (clear both costmaps, no wait), `Wait wait_duration="5"`, `BackUp
+  backup_dist="0.30" backup_speed="0.05"`.
+- `NavigateRecovery.number_of_retries`: `6 -> 10`. **Revert:** `6`.
+- **What to watch on hardware:** does recovery still behave sanely with real (slower, higher-stakes)
+  `BackUp`/`Wait` cycles - this changes how often/how the robot physically moves during recovery,
+  never tested on real hardware at all.
+
+### 2. Goal checker - `config/nav2/nav2_params.yaml`
+**Sim status: validated at both 0.4 and 0.3 (multiple clean trials each); 0.3 is where it settled
+per an explicit accuracy-over-speed call, not just "it worked."**
+- `general_goal_checker.yaw_goal_tolerance`: `0.5 -> 0.3`. **Revert:** `0.5`.
+  **Known interaction:** paired historically with `minimum_turning_radius` (see CHANGELOG 2026-07-19/20)
+  - `minimum_turning_radius` is back at its original `1.0` (item 3), so this pairing is currently
+  UNTESTED together on hardware. If goals stop reaching cleanly, this is the first thing to revert.
+
+### 3. Planner - `config/nav2/nav2_params.yaml`
+**Sim status: NOT re-validated live at 0.8 specifically since items 5/6 (EarlyCommitCritic +
+plugin collision fix) landed - the earlier 0.7/0.8 attempt was tried and reverted BEFORE those
+fixes existed, on a different (now-fixed) root cause. Re-set to 0.8 afterward on request; this
+specific combination (0.8 + fixed EarlyCommitCritic + fixed plugin collision) is untested.**
+- `planner_server.GridBased.minimum_turning_radius`: `1.0 -> 0.8`. **Revert:** `1.0`.
+  **Known interaction:** paired historically with `yaw_goal_tolerance` (item 2, currently `0.3`) -
+  CHANGELOG 2026-07-19/20 found `minimum_turning_radius:1.0` alone with a tight yaw tolerance was
+  worse; `0.8` is a different combination from that finding and hasn't been separately tested.
+- **What to watch on hardware:** does the vehicle now cut curves noticeably tighter/looser than
+  before - this is the parameter most directly shaping how tight a curve the planner assumes vs.
+  what `AckermannConstraints.min_turning_r:0.5` (item 4, unchanged, the controller's real hard
+  limit) actually allows the vehicle to drive.
+
+### 4. MPPI controller tuning - `config/nav2/nav2_params.yaml`
+**Sim status: prune_distance validated only bundled with item 5 (the plugin fix) - 4/4 clean
+trials, but NOT isolated on its own. offset_from_furthest bracketing was fully reverted.**
+- `FollowPath.prune_distance`: `1.7 -> 1.0` (1.7 was itself an undocumented drift from nav2's own
+  stock default of 1.5, not a deliberate original value). **Revert:** `1.5` (stock default) or `1.7`
+  (this project's prior undocumented value) - prefer `1.5` if reverting, since `1.7` was never
+  actually a deliberate choice by anyone.
+- `PathFollowCritic`/`PathAngleCritic.offset_from_furthest`: back at stock defaults `6`/`4` -
+  UNCHANGED from before today, listed here only for completeness (the 6->3->1 bracketing
+  experiment was fully reverted, no action needed).
+- **What to watch on hardware:** `prune_distance:1.0` shrinks how much of the plan every critic can
+  see each cycle - if normal path-following looks worse near a cusp or the final approach (not just
+  the "leans toward a distant curve" symptom it was meant to fix), this is the first thing to
+  revert.
+
+### 5. `EarlyCommitCritic` redesign - `include/qcar_updated/critics/early_commit_critic.hpp` + `.cpp` + `config/nav2/nav2_params.yaml`
+**Sim status: validated, 4/4 clean trials post-fix (only testable at all after item 6 below was fixed).**
+- `active_path_points` (path-point-count gate) replaced with `max_lead_distance` (real Euclidean-
+  distance gate, in meters) in the C++ source - a genuine code change, not just a config value.
+- `nav2_params.yaml`: `EarlyCommitCritic.max_lead_distance: 0.3`.
+  **Revert:** this needs reverting the .hpp/.cpp changes too, not just the yaml - `git diff`/`git
+  checkout` on `early_commit_critic.hpp`/`.cpp` back to the pre-2026-09-02 version (which reads
+  `active_path_points`, default was `8` going into today), then restore `active_path_points: 8` in
+  `nav2_params.yaml` in place of `max_lead_distance: 0.3`, then rebuild.
+- **What to watch on hardware:** this is the newest, least-battle-tested piece of custom C++ in
+  the stack, on top of the plugin-collision fix below. If turning behavior near curves looks wrong
+  in a way sim didn't show, this is a prime suspect.
+
+### 6. Workspace-wide plugin collision fix - `qcar_initial/CMakeLists.txt`, `qcar_ackermann/CMakeLists.txt`, and `install/qcar_initial/` cleanup
+**Sim status: validated - this is what made item 5 testable at all; do not revert this one even
+if item 5 gets reverted.**
+- Both packages' `qcar_critics` library (their own stale copy of `EarlyCommitCritic`, colliding
+  with qcar_updated's under the shared `mppi::critics::` pluginlib namespace) commented out
+  entirely - build, plugin export, and install rules, plus matching `ament_export_*` lines.
+- Manually deleted stale leftover install-space artifacts `colcon build` doesn't clean up on its
+  own: `install/qcar_initial/lib/libqcar_critics.so` (dated 2026-08-10), its
+  `nav2_mppi_controller__pluginlib__plugin` resource-index marker, and
+  `install/qcar_initial/share/qcar_initial/qcar_critics.xml`.
+  **Revert:** N/A - this is a bug fix (a real, confirmed collision that silently made `qcar_updated`'s
+  own `EarlyCommitCritic` changes ineffective since at least mid-August), not an experimental
+  behavior change. Keep this regardless of what happens with item 5. If ever rebuilding
+  `qcar_initial`/`qcar_ackermann` for some other reason, re-verify no `qcar_critics` plugin
+  reappears (`find install -iname "nav2_mppi_controller__pluginlib__plugin"` should only show
+  `qcar_updated`).
+
+### 7. Hardware steering rate limiter - `qcar_onboard/qcar_bridge.py`
+**Sim status: N/A - this code only runs on real hardware, sim never exercises it at all. This is
+the ONE item with zero live validation of any kind, not even in sim.**
+- `STEERING_RATE_LIMIT = 2.0` rad/s added (mirrors the existing `THROTTLE_RATE_LIMIT` pattern) -
+  rate-limits the actual servo command, added specifically because of a live hardware observation
+  (steering oscillating hard during Nav2 retry cycles - encoder-wear risk).
+  **Revert:** delete the `STEERING_RATE_LIMIT` constant and the rate-limiting block in the main
+  loop (`current_steering`/`max_steer_step`/`steer_delta`), and change `car.write()`,
+  `odom.update()`, and the LED thresholds back to using `target_steering` directly instead of
+  `current_steering`.
+- **What to watch on hardware - bench-test first, wheels off the ground:** confirm it actually
+  damps the oscillation without making normal turns feel sluggish/late. This is the change most
+  directly tied to a physical hardware-damage concern, and it's the least tested of everything
+  here - treat it with the most caution on Monday specifically.
+
+### Priority order if something goes wrong Monday
+Test in this order, since later items depend on earlier ones being sound: **6 (plugin fix, keep
+regardless) -> 1 (BT structure) -> 5 (EarlyCommitCritic) -> 4 (prune_distance) -> 3
+(minimum_turning_radius) -> 2 (yaw tolerance) -> 7 (steering limiter, separately on a bench
+first)**. (Updated: item 3 was re-set to 0.8 after this checklist was first written - see its own
+entry above, no longer a no-op.)
+
+## 2026-09-02 - Plugin collision fix confirmed: 4/4 clean trials on the same goal, ~38-41s each
+
+Ran the same 118/120-point, single-cusp goal (Position(3.46995, 6.37912), the one that took 127s/
+2 failures right after the collision fix, or was manually aborted mid-deviation before it) four
+more times back to back, fresh Gazebo+Nav2 launch each time. Result: **4/4 clean, single-pass
+successes, zero failures/recoveries on any of them, 38.1-40.7s each** (38.5, 38.6, 38.1, 40.7s).
+Extremely consistent - a stark, repeated contrast to anything seen on this goal pre-fix. Strong
+confirmation the stale `EarlyCommitCritic` plugin collision (previous entry) was a major, real
+contributor to the erratic path-tracking/recovery-cycling behavior chased for most of today's
+session, not just infrastructure noise.
+
+One invalid trial along the way: an immediate retry right after a prior run's cleanup hit
+`ros2 action send_goal` failing with "rcl node's context is invalid" before any goal was actually
+sent (no `Begin navigating` line at all) - a DDS/context teardown race from restarting too
+quickly, not a nav2 or robot issue. Fixed by adding a few seconds' settle time between a run's
+cleanup and the next launch; the retry succeeded cleanly.
+
+## 2026-09-02 - MAJOR FIND: EarlyCommitCritic plugin name collision across 3 packages, fixed
+
+Ran nav2 directly (Gazebo + full stack, `ros2 launch qcar_updated qcar_nav2.launch.py
+launch_sim:=true`) to independently verify the prune_distance change (previous entry) with the
+exact goal shared. The controller log's own startup line exposed a serious, previously-invisible
+bug:
+
+```
+EarlyCommitCritic instantiated with ... active_path_points 15
+```
+
+`active_path_points` doesn't exist in `qcar_updated`'s code anymore - it was renamed to
+`max_lead_distance` in this morning's redesign entry. **The live run was not loading
+`qcar_updated`'s own compiled critic at all.**
+
+### Root cause
+`mppi::critics::EarlyCommitCritic` is a pluginlib class name, and nav2_mppi_controller's
+`CriticManager::getFullName()` hardcodes the `"mppi::critics::"` prefix - so the class name cannot
+be namespaced per-package the way `qcar_updated::smoothers::CuspStraightenerSmoother` is. Found
+that `qcar_initial` and `qcar_ackermann` **both** independently ship their own, never-updated copy
+of `early_commit_critic.cpp` (`getParam(active_path_points_, "active_path_points", 15)` - the
+literal 2026-07-18 creation-time default) and both call
+`pluginlib_export_plugin_description_file(nav2_mppi_controller qcar_critics.xml)`, registering the
+exact same class name into the same global plugin namespace. pluginlib resolved to one of these
+stale copies instead of `qcar_updated`'s.
+
+**Confirmed via `install/qcar_initial/share/ament_index/resource_index/
+nav2_mppi_controller__pluginlib__plugin/qcar_initial`, timestamped 2026-08-10 12:43** - this
+collision has existed since at least mid-August, likely longer. Every live test of
+`EarlyCommitCritic` this session (the `active_path_points` 15->8 discussion, the `max_lead_distance`
+redesign, all of it) may have been running against whichever stale copy pluginlib happened to
+resolve, not `qcar_updated`'s actual current code - a real, standing confound on top of everything
+else investigated today.
+
+### Fix (user: "bring down conflicting critics on all other packages, I will be using only
+qcar_updated package from now on")
+- **`qcar_initial/CMakeLists.txt`** / **`qcar_ackermann/CMakeLists.txt`**: commented out the
+  entire `qcar_critics` library target (build, plugin export, install rules, and the matching
+  `ament_export_*` lines) rather than just the export line - fully removes these packages from
+  the collision, permanently.
+- Discovered along the way: `qcar_ackermann/src/critics/early_commit_critic.cpp` had an
+  independently broken `#include "qcar_ackermann/critics/early_commit_critic.hpp"` (the header
+  actually lives under `include/qcar_updated/critics/` - another copy-paste leftover) - this
+  library likely hadn't built successfully in some time regardless. Not fixed (the whole target is
+  removed instead), but worth knowing this package's build has been silently broken.
+- **Manually removed stale install-space artifacts** `colcon build` did not clean up on its own
+  (CMake/colcon only adds/updates files a build produces, never deletes ones a build stops
+  producing): `install/qcar_initial/lib/libqcar_critics.so` (dated 2026-08-10, i.e. pre-dating this
+  entire session), its `nav2_mppi_controller__pluginlib__plugin` resource-index marker, and
+  `install/qcar_initial/share/qcar_initial/qcar_critics.xml`. Verified after cleanup: `qcar_updated`
+  is the only package anywhere in `install/` registering anything for
+  `nav2_mppi_controller__pluginlib__plugin`.
+
+### Implication for today's session
+Every conclusion drawn today about `EarlyCommitCritic` specifically (the `active_path_points`
+discussion, whether the `max_lead_distance` redesign helped or not) needs to be treated as
+unverified until re-tested now that the collision is actually fixed. Other findings from today
+(the BT retry-stale-path bug, `yaw_goal_tolerance`/`minimum_turning_radius` tuning,
+`offset_from_furthest` bracketing, `prune_distance`) are NOT affected by this - none of those touch
+`EarlyCommitCritic`.
+
+## 2026-09-02 - Testing prune_distance 1.7->1.0 after video confirmed deviation past EarlyCommitCritic's window
+
+Follow-up to the `EarlyCommitCritic` redesign (previous entry). User shared a new, much longer
+test goal (118 path points, ~7m) and stopped it mid-run specifically to show a path-following
+deviation, not a completion outcome - correctly reframing the actual concern: "the robot should
+always follow the planned path," independent of whether it eventually reaches the goal.
+
+Video review (initial pass missed it, corrected on a closer look at t=14s/16s): the robot's
+heading/position clearly pulls toward a curve several meters away while still on a straight
+section of the path - a real, sustained deviation across multiple seconds, not a one-frame
+artifact. Critically, this happens well outside `EarlyCommitCritic`'s new `max_lead_distance: 0.3`
+window, ruling that fix out as the cause of this specific deviation - it's a different mechanism.
+
+Checked `nav2_mppi_controller`'s actual source (`path_handler.cpp`, humble branch):
+`prune_distance` (stock default `1.5`m) directly bounds, in real meters from the robot's closest
+path point, how much of the plan is exposed to MPPI and every critic each cycle. The live config
+had this at `1.7` with **zero comment or history** - an undocumented drift from the stock default,
+same pattern as the `offset_from_furthest` discrepancy found earlier today. This is a more precise
+match for "the robot leans toward a distant curve" than the rollout-time-horizon theory (deferred
+to a later session per user).
+
+### Changed
+- **`nav2_params.yaml` `FollowPath.prune_distance`**: `1.7` -> `1.0`.
+
+### Known limitation
+NOT validated live yet. Shrinking this window could also degrade normal path-following if the
+critics don't have enough plan visible to do their job well, especially near a cusp or the goal -
+watch for that regression, not just whether the premature-lean deviation improves.
+
+## 2026-09-02 - EarlyCommitCritic redesigned: active_path_points -> real distance gate
+
+Follow-up to the reverted curve-tuning attempts (previous entry). User correctly recalled history
+I had initially mischaracterized: `EarlyCommitCritic` IS the already-identified root cause of
+"robot turns before the curve" (CHANGELOG.md 2026-07-19 (5)), not an unrelated critic built for
+the opposite problem. That entry lowered `active_path_points` 15->8, measurably reducing but not
+eliminating the symptom, and theorized the residual was `PathFollowCritic`/
+`PathAngleCritic.offset_from_furthest` - the exact parameter this session just bracketed across
+its full range (6->3->1) with zero effect, disproving that theory and pointing back at
+`EarlyCommitCritic`'s own gating as the standing cause.
+
+User's diagnosis: `active_path_points` gates on path-POINT COUNT since trip start, a poor proxy
+for physical distance - a path that runs straight for a while before curving can still have its
+curve fall inside that count window. Proposed extending `EarlyCommitCritic` itself with real
+distance-based gating (rather than adding a second, competing custom critic) - correctly noting
+this critic's true original purpose ("commit to a curve at trip start") and today's problem
+("commits to a curve too far before it") are complementary, not opposed, and a distance gate
+naturally handles both: fires immediately when the near-term target is genuinely close (trip
+start with an immediate curve), stays suppressed when it's still physically far off (today's
+problem).
+
+### Changed
+- **`include/qcar_updated/critics/early_commit_critic.hpp`**: `active_path_points_` (size_t)
+  replaced with `max_lead_distance_` (float, default `0.3f`).
+- **`src/critics/early_commit_critic.cpp`**: gate moved from `*furthest_reached_path_point >=
+  active_path_points_` to a real Euclidean distance check between the robot's actual current
+  position (`x0(0)`/`y0(0)` - identical across the whole trajectory batch, since every sampled
+  rollout starts from the same real current state) and the same near-term target point
+  (`offseted_idx`) this critic already scores bearing against. Target computation moved earlier in
+  `score()` so it's available before the new gate check.
+- **`nav2_params.yaml`**: `EarlyCommitCritic.active_path_points: 8` -> `max_lead_distance: 0.3`
+  (value reused from `cusp_straightener_smoother`'s own `min_lead_distance`, not a fresh guess -
+  same underlying "how far ahead is still an upcoming feature vs. current" question).
+
+### Known limitation
+NOT validated live yet. `0.3` is a reasonable reused starting value, not something tuned
+specifically for this critic's target-selection geometry (`offset_from_furthest: 3` picks a point
+3 path-points ahead, whose real distance from the robot depends on the planner's point spacing at
+that location - could be tighter or looser than 0.3m depending on the path).
+
+## 2026-09-02 - Reverted today's curve-tuning attempts (user: "I understand what is happening")
+
+User asked to revert the curve-turning investigation's parameter changes, keeping everything else
+from today (BT recovery fix, yaw_goal_tolerance=0.3, NavigateRecovery retries=10, qcar_bridge.py
+steering rate limiter).
+
+### Reverted to their pre-investigation values
+- **`PathFollowCritic.offset_from_furthest`**: `1` -> back to the stock default `6` (not the `3`
+  "documented intent" value either - bracketing showed neither fixes the symptom, no reason to
+  keep a non-default value).
+- **`PathAngleCritic.offset_from_furthest`**: `1` -> back to the stock default `4`, same reasoning.
+- **`planner_server.GridBased.minimum_turning_radius`**: `0.8` -> back to `1.0`.
+
+### Where this leaves the investigation
+Full trace of today's chase, none of it confirmed as the fix: `minimum_turning_radius` (1.0 ->
+0.7 -> 0.8 -> reverted to 1.0), `offset_from_furthest` bracketed across its full range (6->3->1
+for both critics, no qualitative change, reverted to 6/4), `EarlyCommitCritic` considered and
+correctly ruled out (gated to only the first 8 path points, and lowering it risks reintroducing
+the trip-start-undershoot bug it was built to fix). The one remaining, never-yet-examined
+candidate flagged throughout this investigation: the Gazebo `steering_pid_gain` actuation layer
+(`urdf/qcar_model.xacro`, `3.0 0 0.1`) - whether the simulated steering joints actually overshoot
+a commanded angle during a fast turn-in, independent of anything at the Nav2/MPPI planning layer.
+
+## 2026-09-02 - Bracketing result: offset_from_furthest ruled out, reverted to 3/2
+
+Result of the previous entry's `1`/`1` extreme: **still turned early**. Across the full bracketed
+range (`6` default -> `3` -> `1`), the "turns before reaching the curve" symptom never
+qualitatively changed - a clean negative result. This rules out `PathFollowCritic`/
+`PathAngleCritic.offset_from_furthest` as the dominant cause; it isn't the lever that controls
+this symptom, or at best isn't the dominant one. Reverted to `3`/`2` (the originally-intended fix
+value from earlier today - no evidence it hurts, even if it doesn't fix this).
+
+Moving the investigation to a layer never yet examined in this whole chase: the Gazebo
+`steering_pid_gain` (`urdf/qcar_model.xacro`, `3.0 0 0.1`) that actually drives the simulated
+steering joints to track whatever angle Nav2 commands. Every attempt so far has been at the
+Nav2/MPPI planning-and-cost-weighting layer; none has touched whether the simulated actuator
+itself overshoots a commanded steering angle during a fast turn-in, which would produce this exact
+symptom independent of any critic tuning.
+
+## 2026-09-02 - Deliberate bracketing experiment: offset_from_furthest pushed to 1/1
+
+Video review of the previous entry's `3`/`2` fix (04:02:26 PM screencast) showed the "turns
+before reaching the curve, deviates off path, then over-corrects at the vertex" symptom still
+happening. Rather than keep guessing single values, deliberately bracketing: `6`/`4` (defaults) is
+known-early, `3`/`2` is still-early - pushed hard to `1`/`1` (`PathFollowCritic`/
+`PathAngleCritic.offset_from_furthest`) to find the *other* extreme (turn late/undershoot) as a
+third data point, so the right value can be interpolated instead of guessed. Not intended as a
+final value - expect to walk back toward the middle once this run is observed.
+
+Also discussed and deliberately did NOT touch `EarlyCommitCritic` for this: user correctly pushed
+back that it was built for a different failure (fails to commit to a curve at trip START) and
+lowering it risks reintroducing that bug. It's also gated to only the first `active_path_points: 8`
+path points, so it's very likely not even the active mechanism for a curve reached several seconds
+into a trip - the video's deviation is far more likely governed by PathFollowCritic/PathAngleCritic
+(active for the whole trip), which is what's being bracketed here instead.
+
+## 2026-09-02 - Found and fixed a real bug: offset_from_furthest fixes were never actually applied
+
+User reported the vehicle "turning way too much at the beginning of the curve, not following the
+curve exactly... changed a lot of times already but still not fixed entirely." That phrasing
+prompted rechecking `TUNING.md` rather than continuing to tune `minimum_turning_radius` (a
+different lever - affects curve tightness everywhere, not curve-entry behavior specifically).
+
+`TUNING.md` already documents this exact symptom and already flags the likely cause: its own
+`offset_from_furthest` entry states the live config comment claims `PathFollowCritic`/
+`PathAngleCritic.offset_from_furthest` were lowered `6->3`/`4->2` on 2026-07-18 (2) specifically
+for "the robot turning early... before an upcoming curve actually starts" - **but the actual
+values in `nav2_params.yaml` were still the stock defaults `6`/`4`**, with no CHANGELOG entry
+documenting a reversion. TUNING.md calls this out explicitly as an unexplained discrepancy to
+re-verify. Confirmed by reading the live file directly: yes, still `6`/`4` - the documented fix
+was never actually applied to the config (or was silently lost), not deliberately reverted.
+
+### Changed
+- **`nav2_params.yaml`**: `PathFollowCritic.offset_from_furthest` `6` -> `3`,
+  `PathAngleCritic.offset_from_furthest` `4` -> `2`, matching what the file's own comments already
+  claimed was in effect.
+
+### Known caveat
+TUNING.md also notes a 2026-08-02 retest found "no meaningful change at either value" on a
+*different, harder reorientation goal* - so this isn't guaranteed to fully resolve today's
+specific symptom, but it's a live-verified real discrepancy between documented intent and actual
+config for the *original* turning-early case, and matches what's being reported again today.
+NOT validated live yet - this is the re-verification TUNING.md itself asks for.
+
+## 2026-09-02 - minimum_turning_radius set to 0.8 (user adjustment from the 0.7 first attempt)
+
+Follow-up to the previous entry - user set `planner_server.GridBased.minimum_turning_radius` to
+`0.8` instead of the `0.7` first attempt (still down from `1.0`, still real margin above
+`AckermannConstraints.min_turning_r`'s true `0.5` limit). Same rationale as before applies. Also
+noted directly in the params file this time: `TUNING.md`'s `PathAlignCritic.cost_weight` entry
+already documents this same "turns more than the planned curve" symptom being investigated once
+before (2026-07-19 (3), at the critic-weight layer) and abandoned due to run-to-run noise, not
+fixed - this `minimum_turning_radius` change is a different lever, not a retry of that one.
+NOT validated live yet.
+
+## 2026-09-02 - planner minimum_turning_radius lowered 1.0->0.7 (corner-cutting complaint)
+
+User report: the vehicle turns MORE than the planned curve (executes a tighter arc than planned),
+deviates off the path as a result, and needs a large reorientation to recover - which itself
+triggers a replan right at the K-turn vertex. Asked to "tune the turning radius" for this.
+
+Two different parameters could answer that literally - discussed and picked between them
+(AskUserQuestion) rather than guessing:
+- `FollowPath.AckermannConstraints.min_turning_r` (0.5) - documented in this file and
+  CHANGELOG.md's Bug 3 (2026-07-19) as the vehicle's TRUE physical turning-radius limit,
+  deliberately left alone historically since narrowing its margin from the planner's radius
+  caused a stall/freeze before. Raising it would restrict real vehicle capability and risks
+  reproducing that freeze - not chosen.
+- `PathAlignCritic`/`PathFollowCritic` cost weights - the critics that actually govern
+  path-tracking fidelity (currently untouched nav2 stock defaults: 10.0/5.0). More directly
+  targets "cuts corners" but wasn't the option picked either.
+- **`planner_server.GridBased.minimum_turning_radius`** (chosen) - narrows the plan-vs-execution
+  gap from the planning side instead: lowered `1.0` -> `0.7`, reusing the exact value CHANGELOG.md
+  Bug 3 already validated as giving MPPI real margin above its true 0.5 limit (not a new guess),
+  before it was later loosened to 1.0 on 2026-07-20 for a since-partially-reverted reason (paired
+  with the yaw_goal_tolerance widening that today's session has since undone back to 0.3).
+
+### Known risk
+CHANGELOG.md 2026-07-19(2) found `minimum_turning_radius: 1.0` alone with a tight
+`yaw_goal_tolerance` worse - `yaw_goal_tolerance` is currently `0.3` (tight), not paired back to
+`0.5`. `0.7` still preserves real margin above the controller's `0.5` limit, so this should not
+reproduce the original zero-margin freeze, but the combination (0.7 planner / 0.3 yaw) is itself
+untested. NOT validated live yet.
+
+## 2026-09-02 - yaw_goal_tolerance restored to 0.3 - accuracy prioritized over recovery cost
+
+User call: the project's goal is final-goal accuracy, not speed - the extra time/failure count
+`0.3` costs (previous entry: 161s/5 failures vs `0.4`'s 50.6s/1 failure) is an acceptable price,
+not a defect, AS LONG AS the goal stays reachable. Checked: it does - that 161s/5-failure trial
+still succeeded, using only 5 of `NavigateRecovery`'s 10 retries, well short of exhausting the
+budget. Not "impossible to reach," just more expensive. Restored `yaw_goal_tolerance` to `0.3`.
+
+If a future trial exhausts the retry budget without reaching the goal, that's the actual signal to
+act on (not just the extra time/failures alone) - at that point retune `minimum_turning_radius`
+alongside this, per the original 2026-07-19/20 pairing, rather than reverting yaw again.
+
+## 2026-09-02 - 0.3 reproduced the bad signature even isolated - reverted to 0.4 (the good value)
+
+Previous entry's isolated `0.3` trial (Wait untouched at 5s, ruling out the earlier confound):
+**~161s, 5 failures**. Timing signature: `40.35s, 33.55s, 30.15s, 30.05s, 2.24s` - 2 of the 4
+failures ran to almost exactly the 30s `movement_time_allowance` ceiling, the same "stuck for the
+whole window, no real progress" pattern as the earlier bundled regression - vs. `0.4`'s clean
+`~50.6s`/1-failure run with real progress before its one failure.
+
+This confirms the 2026-07-19 finding (`minimum_turning_radius: 1.0` + tight `yaw_goal_tolerance`
+is worse) still holds on today's system, independent of the `Wait` duration - it wasn't just an
+artifact of the earlier confound. `yaw_goal_tolerance` reverted to `0.4`, which two isolated
+trials now support as a real, meaningful tightening (28.6deg -> 22.9deg) without reproducing the
+instability. Not going back to `0.3` without also retuning `minimum_turning_radius`, per the
+original 07-19/20 pairing.
+
+## 2026-09-02 - yaw_goal_tolerance pushed to 0.3, isolated this time (Wait untouched at 5s)
+
+Previous entry's `0.4`-only trial: **~50.6s, 1 failure**, real progress before the one failure
+(not the "stuck the whole window" signature from the earlier regression) - best trial of the day,
+confirming `0.4` alone isn't the problem. Pushing further to `0.3` (user request) - this is the
+exact value 2026-07-19 documented as worse when paired with `minimum_turning_radius: 1.0` (still
+`1.0`, unchanged), but that finding predates `cusp_straightener`, `EarlyCommitCritic`, and today's
+BT retry fix, so it may not transfer to the current system - testing deliberately, `Wait` still
+untouched at `5s` so the result stays attributable to this one variable. If this regresses,
+`minimum_turning_radius` is the next thing to retune alongside it (per the original 07-19/20
+pairing), not just another revert. NOT validated live yet.
+
+## 2026-09-02 - yaw_goal_tolerance tightened again, more conservatively: 0.5 -> 0.4 only
+
+Still want tighter final-orientation accuracy at goal (motivating reason unchanged from the
+0.5->0.3 attempt earlier today). This time: only `0.4`, not back to `0.3`, and `Wait` is left
+untouched at `5s` - `0.3` paired with `minimum_turning_radius: 1.0` (still `1.0`) is the exact
+combination 2026-07-19 already found worse, independent of today's events, so re-trying it
+wouldn't be a fresh test. Changing one variable this time so a result is actually attributable.
+NOT validated live yet.
+
+## 2026-09-02 - Revert confirmed: retest at yaw_goal_tolerance=0.5/Wait=5s beat both prior runs
+
+Retested at the reverted values (previous entry). Result: **~57s total, 1 failure** - better than
+both the original validated BT-fix run (89s/2 failures) and obviously the regressed run (214s/6
+failures) this reverts. The one failure showed real progress beforehand (~40s runtime, not the
+"zero progress for the entire window" signature from the bad run), recovered cleanly through the
+restored 5s wait, and finished via a fresh plan that correctly recognized the robot was already
+at/past its only remaining cusp. Consistent with (though - one run - not conclusive proof of) the
+yaw_goal_tolerance/Wait combination having been the regression's cause. Not re-attempting either
+change for now.
+
+## 2026-09-02 - Reverted yaw_goal_tolerance and Wait shortening - next trial was dramatically worse
+
+The trial right after tightening `yaw_goal_tolerance` (0.5->0.3) and shortening the recovery
+`Wait` (5s->2s) together was much worse than the validated BT-fix run: **~214s and 6 failures**,
+vs. the prior **~89s and 2 failures**. Timing signature (controller-start to failure deltas):
+`30.10s, 30.05s, 33.90s, 30.15s, 30.15s, 30.15s, 1.89s` - **5 of 6 failures ran to almost exactly
+the 30.0s `movement_time_allowance` ceiling**, regardless of the fresh replan's length (11-26
+points) - i.e. the robot made no measurable progress for nearly the entire window on most
+attempts, a more severe symptom than the earlier single-cusp "searching" freeze, and this time
+happening on genuinely fresh, correctly-formed replans (the stale-path retry bug fix held - every
+failure here has a real preceding `smoother_server` replan).
+
+### Changed (reverted)
+- **`nav2_params.yaml` `general_goal_checker.yaw_goal_tolerance`**: `0.3` -> back to `0.5`.
+- **`navigate_to_pose_w_replanning_and_recovery.xml` `ClearSettleReplan` `Wait`**: `2` -> back
+  to `5` seconds.
+- `NavigateRecovery.number_of_retries` (10) and the `qcar_bridge.py` `STEERING_RATE_LIMIT`
+  addition were NOT reverted - the retries increase is harmless/protective regardless, and the
+  regression run was in sim, which never routes through `qcar_bridge.py` at all, so that change
+  cannot have been responsible for this specific result.
+
+### Not yet isolated
+Both changes were tried bundled into one trial, so it's not established which one (or neither)
+caused the regression - this codebase has documented real run-to-run variance even on an
+unchanged config (see the `PathDeviationCritic` 3-trial comparison earlier in this file: 38-113s
+spread for the identical setup). Reverted both together to get back to the last known-good state
+and retest, rather than guess. If a retest back at these reverted values still shows this severity
+of freeze, the cause is elsewhere (possibly the BT restructuring itself feeding MPPI shorter,
+earlier-cusp paths on every failure now, per the FollowPath-retry-removal entry above) and this
+revert doesn't fix it.
+
+## 2026-09-02 - Steering rate limit added (hardware oscillation risk), recovery Wait shortened
+
+User reported on real hardware: during Nav2 retry/orientation-correction cycles (the MPPI
+cusp-negotiation "searching" behavior from the freeze investigation above), commanded steering
+oscillated hard left-right, spontaneously - a real risk of encoder/servo wear from repeated
+full-range reversals under load. Separately, the recovery Wait added earlier today (previous
+entry) was judged to be holding the robot still longer than necessary.
+
+### Changed
+- **`qcar_onboard/qcar_bridge.py`**: added `STEERING_RATE_LIMIT = 2.0` rad/s and a
+  `current_steering` state variable, rate-limited toward `target_steering` every cycle exactly
+  like the existing `THROTTLE_RATE_LIMIT`/`current_throttle` pattern (previously steering had NO
+  rate limit at all - `target_steering` went straight from `compute_steering()` to `car.write()`
+  every ~50ms). This is a hardware-boundary backstop against the oscillation, not a fix for
+  whatever upstream (Nav2/MPPI) is driving it. Also switched `car.write()`'s steering argument,
+  the LED turn-indicator thresholds, and odometry's steering input from `target_steering` to
+  `current_steering` throughout, since odometry must reflect the angle actually commanded to the
+  servo this cycle, not the instantaneous target - using the target there would now overstate how
+  far/fast the wheel actually turned whenever the rate limit is actively damping a change.
+- **`navigate_to_pose_w_replanning_and_recovery.xml`**: `ClearSettleReplan`'s `Wait` lowered
+  `5`->`2` seconds.
+
+### Known limitation
+Both values (`STEERING_RATE_LIMIT=2.0` rad/s, `Wait=2s`) are first guesses, NOT validated on
+hardware or in sim against the actual oscillation. Bench-test the steering limiter with wheels off
+the ground before trusting it on a real drive; if normal path-following now feels sluggish/late
+into real turns, raise `STEERING_RATE_LIMIT` rather than removing it. If replans right after the
+shortened `Wait` look like they're using stale/still-updating costmap data, raise it back toward
+5s rather than lowering further.
+
+## 2026-09-02 - Tightened yaw_goal_tolerance 0.5->0.3, raised NavigateRecovery retries 6->10
+
+Follow-up to the BT fix below: that trial reached the goal successfully but with a visibly wrong
+final orientation - `yaw_goal_tolerance: 0.5` (~28.6deg) was silently accepting it. Flagging that
+here per the qcar_updated_prefer_visible_failure_over_silent_wrong_result convention: this was a
+real, meaningful heading miss reported as unqualified success, not a caveat buried in a log line.
+
+### Changed
+- **`nav2_params.yaml` `general_goal_checker.yaw_goal_tolerance`**: `0.5` -> `0.3` (back to the
+  pre-2026-07-14/20-widening value).
+- **`navigate_to_pose_w_replanning_and_recovery.xml` `NavigateRecovery`**: `number_of_retries`
+  `6` -> `10` - a tighter tolerance means more attempts may be needed to actually converge
+  instead of latching onto the first "close enough" pass; raised the budget so that doesn't just
+  turn into more outright navigation failures.
+
+### Known risk, not yet re-validated
+`yaw_goal_tolerance` and `planner_server.GridBased.minimum_turning_radius` (still `1.0`) were
+explicitly documented as a paired tuning (CHANGELOG.md 2026-07-19/20) after `minimum_turning_radius:
+1.0` alone with a tight yaw tolerance was live-tested and found WORSE. This change tightens yaw
+alone, betting that the extra retry budget plus the now-fixed replan-from-current-pose BT (entry
+below) compensates - that bet is untested. If goals start failing/cycling out of retries instead
+of completing cleanly, this pairing is the first thing to suspect: either revert
+`yaw_goal_tolerance` to `0.5` or retune `minimum_turning_radius` alongside it, per the original
+2026-07-19/20 finding.
+
+## 2026-09-02 - BT fix: FollowPath no longer retries with a stale path, first sim trial clean
+
+Root-caused via video/log correlation (see qcar_updated_mppi_cusp_freeze_investigation memory):
+`FollowPath`'s own one-shot `RecoveryNode` retry (in
+`config/nav2/behavior_trees/navigate_to_pose_w_replanning_and_recovery.xml`) cleared only the
+local costmap and resent the exact same, already-partially-executed `{path}` unchanged. Since
+`IsPathValid` often still judged that stale path collision-free, this retry bypassed
+`InitialComputePathToPose` entirely. Resending the untouched path re-triggers
+`nav2_mppi_controller`'s `PathHandler::setPath()` (`enforce_path_inversion: true`) to re-scan the
+FULL original path for its FIRST inversion and re-arm the cusp-gate there - even when the robot
+had already driven past that cusp and was working on a later one. Confirmed on video: the
+`/trajectories` rollout cloud visibly got pulled back to re-target the first cusp's (curve-extended)
+vertex instead of continuing from the robot's real position, appearing as a "searching" freeze.
+
+### Changed
+- Removed `FollowPath`'s `RecoveryNode` wrapper (and its paired local-costmap-clear) - a single
+  `FollowPath` failure now propagates straight to `RecoveryFallback` instead of getting one bare,
+  no-replan retry first.
+- `RecoveryFallback`'s `RoundRobin` collapsed from three independent tiers
+  (`ClearingActions`/`Wait`/`BackUp`) to two: first tier now always clears both costmaps AND waits
+  5s (`ClearSettleReplan`) before falling back out to `NavigateOuter`, which unconditionally
+  replans via `InitialComputePathToPose` from the robot's actual current pose - a fresh plan can't
+  re-target an already-passed cusp, since that cusp isn't in it. `BackUp` kept as the second-tier
+  escalation for a genuinely wedged vehicle.
+
+### First trial result (sim, one run)
+Same goal that previously took 185-224s and 4-6 failures (with the multi-tens-of-seconds
+"searching" freeze eating most of the middle of the run) completed in **~89s with only 2
+failures**, both recovering cleanly via the new clear+settle+replan path - no stale-path resend,
+no freeze-and-search symptom observed. `min_lead_distance` correctly logged skipping the
+extend/straighten treatment on a cusp the robot was already at/past (`idx=1: ... 0.060m ahead
+(< 0.300m) ... skipped`), which the old stale-retry path never exercised meaningfully since it
+never handed the smoother a genuinely fresh, current-pose-based plan at that point.
+
+### Known limitation
+One sim run only - not yet repeated across multiple trials or re-tested on hardware. The removed
+per-FollowPath-failure local-only retry was cheap; every failure now costs at least a 5s settle
+before retrying, a latency tradeoff not yet stress-tested against a run where the cheap retry
+alone would have sufficed.
+
 ## 2026-09-01 - Reverse gain tuning parked: REVERSE_DEADBAND=0.055, REVERSE_GAIN=0.04 (fresh battery)
 
 Closing entry for today's reverse-gain investigation (see the two entries below for the fuller

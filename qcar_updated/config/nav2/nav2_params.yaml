@@ -169,7 +169,54 @@ controller_server:
       # reaches goals "almost accurately." The two values interact (a looser heading tolerance
       # stops the goal checker from demanding the tight match that made minimum_turning_radius:1.0
       # alone worse) - change them together, not independently. See CHANGELOG.md 2026-07-14/20.
-      yaw_goal_tolerance: 0.5
+      #
+      # FLAG 2026-09-02: briefly tried tightening 0.5->0.3 after a run succeeded with a visibly
+      # wrong final orientation (0.5 rad/~28.6deg was silently accepting that). REVERTED same day
+      # after the very next trial got dramatically worse (214s/6 failures vs the prior 89s/2 -
+      # see CHANGELOG.md 2026-09-02) with a suspicious signature: 5 of 6 failures ran to EXACTLY
+      # the 30s movement_time_allowance ceiling regardless of path length, i.e. the robot wasn't
+      # moving at all for nearly the whole window, repeatedly, across multiple genuinely fresh
+      # replans - not just the one-cusp "searching" freeze seen before. Root cause not isolated
+      # (this was tested bundled with the Wait=2s change below, and this system has documented
+      # real run-to-run variance even on an unchanged config - see the PathDeviationCritic 3-trial
+      # comparison earlier in this file). Reverting BOTH unvalidated changes together to retest
+      # from the last known-good state rather than guessing which one (or neither) was at fault.
+      # The underlying 2026-07-19 pairing finding (minimum_turning_radius:1.0 alone, tight yaw,
+      # was WORSE) still applies if this is revisited - change both together, not independently.
+      #
+      # FLAG 2026-09-02 (2): retrying a tightening, more conservatively this time - 0.5->0.4, NOT
+      # back to 0.3. 0.3 specifically (with minimum_turning_radius still 1.0) is the exact pairing
+      # 2026-07-19 already found worse once before, independent of anything from today, so going
+      # straight back there would be retracing known-bad territory rather than a fresh test. This
+      # time changing ONLY this value (Wait stays at 5s, untouched) so a regression - if any - is
+      # actually attributable.
+      #
+      # RESULT: 0.4 alone (Wait still 5s) was clean - ~50.6s, 1 failure, real progress before that
+      # failure (not the "stuck for the whole window" signature from the 0.3+Wait=2s regression) -
+      # actually the best trial yet. See CHANGELOG.md 2026-09-02.
+      #
+      # FLAG 2026-09-02 (3): pushing further, 0.4->0.3, Wait still untouched at 5s. This IS the
+      # exact value 2026-07-19 found worse when paired with minimum_turning_radius:1.0 (still 1.0)
+      # - but that finding predates cusp_straightener, EarlyCommitCritic, and today's BT fix, so
+      # it may no longer transfer to the current system. Testing it deliberately rather than
+      # assuming either way. If this regresses, minimum_turning_radius is the next thing to retune
+      # alongside it (per the original 07-19/20 pairing), not just revert yaw_goal_tolerance again.
+      #
+      # RESULT: 0.3 alone (Wait still 5s, isolated from the earlier confound) reproduced the same
+      # bad signature - ~161s, 5 failures, 2 of them running to almost exactly the 30s
+      # movement_time_allowance ceiling (30.15s/30.05s) with no real progress, vs. 0.4's clean
+      # 50.6s/1-failure run. Confirms the 2026-07-19 minimum_turning_radius:1.0 + tight-yaw finding
+      # still holds on today's system - not an artifact of the earlier Wait=2s confound.
+      #
+      # FLAG 2026-09-02 (4): RESTORED to 0.3 anyway, per explicit user decision - the project's
+      # goal is final-goal ACCURACY, not speed, so the extra recovery time/failure count above is
+      # an acceptable cost, not a defect, as long as the goal remains reachable. It is: the 0.3
+      # trial above succeeded, using 5 of NavigateRecovery's 10 retries - well short of exhausting
+      # the budget, not "stuck forever." If a future trial DOES exhaust the retry budget without
+      # reaching the goal, that's the point where minimum_turning_radius needs retuning alongside
+      # this (per the original 07-19/20 pairing) rather than just accepting more retries. See
+      # CHANGELOG.md 2026-09-02.
+      yaw_goal_tolerance: 0.3
     # MPPIController (not RegulatedPurePursuitController): RPP had a confirmed instability at path
     # cusps (reverse/direction-change points) in this Humble nav2 version that tuning lookahead
     # distances, speed regulation, and reverse_penalty never reliably eliminated. MPPI samples many
@@ -218,7 +265,20 @@ controller_server:
       # per-cycle optimizer CPU cost; still well within controller_frequency's 50ms budget at this
       # batch_size/time_steps.
       iteration_count: 2
-      prune_distance: 1.7
+      # FLAG 2026-09-02: was 1.7 with no comment/history at all - an undocumented drift from
+      # nav2_mppi_controller's own stock default (1.5, path_handler.cpp), same pattern as the
+      # offset_from_furthest discrepancy found earlier today. path_handler.cpp's
+      # getGlobalPlanConsideringBoundsInCostmapFrame() uses this to bound, in real meters from the
+      # robot's closest path point, how much of the plan is exposed to MPPI and every critic each
+      # cycle - a more direct match than time_steps for "the robot leans toward a curve well before
+      # reaching it" (live-confirmed on video: heading/position pulling toward a curve several
+      # meters away while still on a straight section, well past EarlyCommitCritic's new
+      # max_lead_distance:0.3 window, ruling that fix out as the cause of THIS deviation). Testing
+      # a real reduction, 1.7->1.0, to see if shrinking the window the critics can see reduces the
+      # premature lean. NOT validated live yet - if normal path-following degrades (critics need
+      # enough plan visible to do their job, especially near a cusp/goal), this is the first value
+      # to walk back up.
+      prune_distance: 1.0
       transform_tolerance: 0.1
       temperature: 0.3
       gamma: 0.015
@@ -285,20 +345,31 @@ controller_server:
         # point, with no threshold_to_consider/max_angle_to_furthest gate (unlike stock
         # PathAngleCritic) - specifically to make MPPI commit to the path's initial curvature
         # from the very first control cycle instead of settling into a near-straight local
-        # optimum. IS gated on active_path_points though: live-tested with no such gate and it
-        # broke ordinary path-following for the rest of the trip, since this critic's fixed
-        # near-term target stops being a meaningful signal once real progress has been made.
+        # optimum. Gated (see max_lead_distance below) though: live-tested ungated and it broke
+        # ordinary path-following for the rest of the trip, since this critic's fixed near-term
+        # target stops being a meaningful signal once real progress has been made.
         offset_from_furthest: 3
         early_time_steps: 10
-        # Lowered from 15 to 8: with no distance/urgency gating beyond active_path_points, this
-        # critic's high weight (15.0) pulled toward its near-term look-ahead target for the entire
-        # first 15 path points regardless of whether a curve was actually imminent - confirmed via
-        # /plan-vs-/odom comparison (actual y up to 3x planned y well before an upcoming curve
-        # began). Lowering to 8 measurably reduced this (~1.9x, down from ~3x) without regressing
-        # the original "curve at trip start" case this critic exists for. Deviation is reduced, not
-        # eliminated - PathFollowCritic/PathAngleCritic's own smaller look-ahead offsets likely
-        # account for the remainder. See CHANGELOG.md 2026-07-19 (5).
-        active_path_points: 8
+        # REDESIGNED 2026-09-02: was active_path_points (a fixed count of path POINTS from trip
+        # start: 15, then lowered to 8 same day as CHANGELOG.md 2026-07-19 (5) - a path-point count
+        # is a poor proxy for physical distance. That entry live-confirmed the real bug this caused
+        # ("robot turns before the curve", up to 3x the planned lateral offset on a path that runs
+        # straight for ~1m before curving - the curve happened to fall inside the point-count
+        # window). Lowering 15->8 only reduced it (~1.9x), not eliminated - and 2026-09-02 further
+        # investigation ruled out that entry's own theory for the residual
+        # (PathFollowCritic/PathAngleCritic.offset_from_furthest, bracketed across its full 6->3->1
+        # range with zero effect), pointing squarely back at this critic's own gating.
+        #
+        # Replaced with a real Euclidean-distance gate against the same near-term target this
+        # critic already scores against (src/critics/early_commit_critic.cpp), mirroring
+        # cusp_straightener_smoother's already-proven min_lead_distance pattern: only fires while
+        # that target is within max_lead_distance meters of the robot's actual current position,
+        # regardless of path-point count. Naturally covers both cases with one mechanism - fires
+        # immediately at genuine trip start (distance ~0, same as before) and stays suppressed for
+        # a curve that's still physically far off (fixing the 07-19(5) residual). 0.3m reused from
+        # cusp_straightener's own min_lead_distance value (not a fresh guess). NOT validated live
+        # yet.
+        max_lead_distance: 0.3
         # false (nav2_mppi_controller's own reversing-allowed convention, see
         # utils::posePointAngle) as of 2026-07-19 - a SmacPlannerHybrid Reeds-Shepp path can
         # legitimately need a reverse (K-turn) segment anywhere a sharp reorientation is needed,
@@ -357,20 +428,22 @@ controller_server:
         # that scenario from the first control cycle regardless of the threshold's value. Kept
         # here only for the narrower "dead zone during normal final approach" case it does fix.
         threshold_to_consider: 0.15
-        # offset_from_furthest lowered from the default 6 - user reported the robot turning
-        # early relative to the planned path, before an upcoming curve actually starts. Read the
-        # real scoring code (path_follow_critic.cpp on GitHub): this critic pulls each sampled
-        # trajectory's endpoint toward the path point `offset_from_furthest` indices ahead of
-        # wherever the robot has currently progressed to - a target that far ahead can land past
-        # the start of an upcoming curve, pulling the trajectory (and hence the executed heading)
-        # toward that curve before the robot has physically reached it. Lower value keeps the
-        # target point closer to actual current progress.
+        # offset_from_furthest: back at the stock default 6 as of 2026-09-02. Prior history
+        # (2026-07-18 (2)) lowered this to 3 for a "turns early before a curve" report and
+        # believed it fixed; TUNING.md later flagged that the live value never actually matched
+        # that documented intent (still 6, undocumented discrepancy). Re-investigated 2026-09-02:
+        # tried 3, then deliberately bracketed down to 1 (the lowest meaningful value) - the "turns
+        # early" symptom persisted unchanged across the entire 6->3->1 range, RULING OUT this
+        # parameter as the dominant cause. Reverted to the true stock default rather than leave it
+        # at an arbitrary non-default value that demonstrably doesn't fix the reported symptom.
+        # See CHANGELOG.md 2026-09-02 for the full bracketing investigation; next suspect flagged
+        # there is the Gazebo steering_pid_gain (urdf/qcar_model.xacro), not yet examined.
         offset_from_furthest: 6
       PathAngleCritic:
-        # offset_from_furthest lowered from the default 4, same reasoning and same mechanism as
-        # PathFollowCritic above (confirmed via path_angle_critic.cpp on GitHub) - this critic
-        # steers the robot's *heading* toward the path point this many indices ahead of current
-        # progress, which is the more direct cause of visibly "turning early" into a curve.
+        # offset_from_furthest: back at the stock default 4 as of 2026-09-02, same history and
+        # same reasoning as PathFollowCritic.offset_from_furthest above - bracketed 4->2->1, no
+        # qualitative change in the "turns early" symptom, ruled out as the dominant cause. See
+        # CHANGELOG.md 2026-09-02.
         offset_from_furthest: 4
       PathAlignCritic:
         # offset_from_furthest lowered from the default 20 as of 2026-07-18 (3) - this parameter
@@ -458,7 +531,8 @@ planner_server:
       angle_quantization_bins: 72
       analytic_expansion_ratio: 3.5
       analytic_expansion_max_length: 3.0
-      # Wheelbase 0.25725m / tan(30deg max steer) = ~0.445m true minimum. Raised 0.5->0.7->1.0.
+      # Wheelbase 0.25725m / tan(30deg max steer) = ~0.445m true minimum. Raised 0.5->0.7->1.0,
+      # now lowered back to 0.7.
       # 0.5 exactly matched FollowPath.AckermannConstraints.min_turning_r (the controller's hard
       # limit) below, leaving MPPI's sampled trajectories zero margin - any trajectory noisier than
       # perfect curved slightly tighter than 0.5m and got penalized, so MPPI kept preferring
@@ -469,7 +543,18 @@ planner_server:
       # - user-confirmed this combination reaches goals "almost accurately." This value alone (1.0,
       # tight yaw tolerance) was previously live-tested WORSE - change both together if retuning.
       # See CHANGELOG.md 2026-07-19 (2) and 2026-07-20.
-      minimum_turning_radius: 1.0
+      #
+      # FLAG 2026-09-02: tried lowering 1.0->0.7, then 0.8, chasing a "turns more than the planned
+      # curve, deviates off path" report. REVERTED back to 1.0 that same day - the same
+      # investigation (see CHANGELOG.md 2026-09-02) found via video review that the actual symptom
+      # was present from the very start of a curve (not just its tightness), pointing at
+      # EarlyCommitCritic (fixed) and the plugin-collision bug (also fixed) instead. Set back to
+      # 0.8 afterward (user request) now that both of those are fixed and sim-validated (4/4 clean
+      # trials) - narrows the plan-vs-execution gap again while keeping real margin above
+      # AckermannConstraints.min_turning_r's true 0.5 limit. NOT re-validated live yet at 0.8
+      # specifically since the EarlyCommitCritic/plugin fixes landed - see the "HARDWARE
+      # VALIDATION PENDING" checklist at the top of CHANGELOG.md.
+      minimum_turning_radius: 0.8
       # raised from 2.0 - makes the planner prefer a forward-only route even if longer, only
       # actually planning a reverse segment when the goal orientation truly can't be reached
       # forward-only. Fewer cusps encountered in practice = fewer chances to hit the residual

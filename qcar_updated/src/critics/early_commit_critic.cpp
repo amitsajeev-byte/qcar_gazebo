@@ -1,6 +1,7 @@
 #include "qcar_updated/critics/early_commit_critic.hpp"
 
 #include <algorithm>
+#include <cmath>
 
 #include <xtensor/xbuilder.hpp>
 #include <xtensor/xmath.hpp>
@@ -14,7 +15,7 @@ void EarlyCommitCritic::initialize()
   auto getParam = parameters_handler_->getParamGetter(name_);
   getParam(offset_from_furthest_, "offset_from_furthest", 3);
   getParam(early_time_steps_, "early_time_steps", 10);
-  getParam(active_path_points_, "active_path_points", 15);
+  getParam(max_lead_distance_, "max_lead_distance", 0.3f);
   getParam(forward_preference_, "forward_preference", false);
   getParam(power_, "cost_power", 1);
   getParam(weight_, "cost_weight", 10.0);
@@ -22,8 +23,8 @@ void EarlyCommitCritic::initialize()
   RCLCPP_INFO(
     logger_,
     "EarlyCommitCritic instantiated with %u power, %f weight, offset_from_furthest %zu, "
-    "early_time_steps %zu, active_path_points %zu, forward_preference %s",
-    power_, weight_, offset_from_furthest_, early_time_steps_, active_path_points_,
+    "early_time_steps %zu, max_lead_distance %f, forward_preference %s",
+    power_, weight_, offset_from_furthest_, early_time_steps_, max_lead_distance_,
     forward_preference_ ? "true" : "false");
 }
 
@@ -34,12 +35,6 @@ void EarlyCommitCritic::score(CriticData & data)
   }
 
   utils::setPathFurthestPointIfNotSet(data);
-
-  // Only relevant right at the start of a path - once the robot has made real progress, let the
-  // normal path/goal critics take over rather than fighting them with a fixed near-term target.
-  if (*data.furthest_reached_path_point >= active_path_points_) {
-    return;
-  }
 
   const size_t path_size = data.path.x.shape(0) - 1;
   const size_t offseted_idx = std::min(
@@ -59,6 +54,17 @@ void EarlyCommitCritic::score(CriticData & data)
   // robot's single current pose, so this still scores every sampled trajectory independently.
   const xt::xtensor<float, 1> x0 = xt::view(data.trajectories.x, xt::all(), 0);
   const xt::xtensor<float, 1> y0 = xt::view(data.trajectories.y, xt::all(), 0);
+
+  // Real-distance gate (see max_lead_distance_ comment in the header): every trajectory in the
+  // batch starts from the same actual current robot pose, so x0(0)/y0(0) IS that pose - only
+  // apply this critic while the near-term target is still genuinely close, not just early in the
+  // path's point count.
+  const float dx = target_x - x0(0);
+  const float dy = target_y - y0(0);
+  if (std::sqrt(dx * dx + dy * dy) > max_lead_distance_) {
+    return;
+  }
+
   const xt::xtensor<float, 1> bearing = xt::atan2(target_y - y0, target_x - x0);
   // A Reeds-Shepp K-turn segment (SmacPlannerHybrid, enabled via
   // planner_server.GridBased.motion_model_for_search) can legitimately require driving AWAY from

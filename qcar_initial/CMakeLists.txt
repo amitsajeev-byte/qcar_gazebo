@@ -31,32 +31,43 @@ find_package(pluginlib REQUIRED)
 find_package(xtensor REQUIRED)
 find_package(xsimd REQUIRED)
 
-add_library(qcar_critics SHARED
-  src/critics/early_commit_critic.cpp
-)
-target_include_directories(qcar_critics PUBLIC
-  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-  $<INSTALL_INTERFACE:include>
-)
-ament_target_dependencies(qcar_critics
-  nav2_mppi_controller
-  nav2_costmap_2d
-  rclcpp
-  rclcpp_lifecycle
-  pluginlib
-  xtensor
-)
-target_link_libraries(qcar_critics xtensor::optimize xtensor::use_xsimd)
-pluginlib_export_plugin_description_file(nav2_mppi_controller qcar_critics.xml)
-
-install(TARGETS qcar_critics
-  ARCHIVE DESTINATION lib
-  LIBRARY DESTINATION lib
-  RUNTIME DESTINATION bin
-)
-install(DIRECTORY include/
-  DESTINATION include
-)
+# DISABLED WHOLESALE 2026-09-02: this package's qcar_critics library (early_commit_critic.cpp)
+# registered mppi::critics::EarlyCommitCritic into the SAME global pluginlib namespace as
+# qcar_updated's own (and qcar_ackermann's) identically-named critic - nav2_mppi_controller's
+# CriticManager::getFullName() hardcodes the "mppi::critics::" prefix, so there is no way to
+# namespace these apart at the C++ level. A live qcar_updated launch confirmed the plugin actually
+# resolved was a stale copy of this critic (still active_path_points:15, predating even the
+# 2026-07-19 fix, let alone the 2026-09-02 max_lead_distance redesign) instead of qcar_updated's
+# own rebuilt one - meaning qcar_updated's changes to this critic had zero effect on live testing
+# until this was found. qcar_updated is now the only actively developed package - removing this
+# target entirely rather than just its plugin export. See CHANGELOG.md 2026-09-02.
+#
+# add_library(qcar_critics SHARED
+#   src/critics/early_commit_critic.cpp
+# )
+# target_include_directories(qcar_critics PUBLIC
+#   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+#   $<INSTALL_INTERFACE:include>
+# )
+# ament_target_dependencies(qcar_critics
+#   nav2_mppi_controller
+#   nav2_costmap_2d
+#   rclcpp
+#   rclcpp_lifecycle
+#   pluginlib
+#   xtensor
+# )
+# target_link_libraries(qcar_critics xtensor::optimize xtensor::use_xsimd)
+# pluginlib_export_plugin_description_file(nav2_mppi_controller qcar_critics.xml)
+#
+# install(TARGETS qcar_critics
+#   ARCHIVE DESTINATION lib
+#   LIBRARY DESTINATION lib
+#   RUNTIME DESTINATION bin
+# )
+# install(DIRECTORY include/
+#   DESTINATION include
+# )
 # --- end custom MPPI critic plugin ---
 
 if(BUILD_TESTING)
@@ -80,8 +91,7 @@ install(PROGRAMS
   DESTINATION lib/${PROJECT_NAME}
 )
 
-ament_export_include_directories(include)
-ament_export_libraries(qcar_critics)
-ament_export_dependencies(nav2_mppi_controller nav2_costmap_2d rclcpp rclcpp_lifecycle pluginlib xtensor)
+# ament_export_include_directories/libraries/dependencies for the disabled qcar_critics target
+# above were removed 2026-09-02 alongside it (see that comment block).
 
 ament_package()

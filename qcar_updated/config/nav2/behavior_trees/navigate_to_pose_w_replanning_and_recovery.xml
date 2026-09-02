@@ -40,10 +40,39 @@
      reset), not a flaw in the debounce logic itself, but reverted to the last fully-validated
      config (stock IsPathValid) ahead of video capture rather than keep debugging live. Code kept
      (src/bt/), deselected. See CHANGELOG.md 2026-08-26 before re-enabling.
+
+  4. EXPERIMENTAL 2026-09-02: removed FollowPath's own bare one-retry RecoveryNode. Previously,
+     a FollowPath failure (e.g. progress_checker timing out mid cusp) got ONE retry that just
+     cleared the local costmap and resent the exact same, already-partially-executed `{path}`
+     unchanged - and since IsPathValid often still judged that stale path collision-free, this
+     retry bypassed InitialComputePathToPose entirely. That resend re-triggers
+     nav2_mppi_controller's PathHandler::setPath() (enforce_path_inversion: true in
+     nav2_params.yaml) to re-scan the FULL original path for its FIRST inversion and re-arm the
+     cusp-gate there - even if the robot had already driven past that cusp and was working on a
+     later one. Visually confirmed on video: MPPI's /trajectories rollout cloud gets pulled back
+     to re-target the first cusp's (now curve-extended) vertex instead of continuing from the
+     robot's real position. See the qcar_updated_mppi_cusp_freeze_investigation memory (2026-09-02
+     entries) for the full video/log correlation.
+
+     Fix tried here: let ANY FollowPath failure propagate straight to RecoveryFallback below
+     (no stale-path retry at all), and made RecoveryFallback's first tier always clear both
+     costmaps + wait (let the robot sit still and let sensor data settle) before NavigateOuter is
+     retried - which unconditionally replans via InitialComputePathToPose, from the robot's ACTUAL
+     current pose. A fresh plan from the current pose cannot re-target an already-passed cusp,
+     since that cusp isn't in the new plan at all. BackUp is kept as a second-tier escalation (only
+     reached if the clear+wait+replan cycle itself keeps failing) for a genuinely wedged vehicle.
+     NOT YET VALIDATED live - see CHANGELOG.md 2026-09-02 before trusting this over the previous
+     config.
+
+  5. EXPERIMENTAL 2026-09-02: NavigateRecovery retries raised 6->10, alongside tightening
+     general_goal_checker.yaw_goal_tolerance 0.5->0.3 in nav2_params.yaml (see FLAG comment
+     there). A tighter yaw tolerance means more attempts will be needed to actually converge
+     instead of latching onto the first "close enough" pass - raised the retry budget so that
+     doesn't just turn into more outright navigation failures. NOT validated live yet.
 -->
 <root main_tree_to_execute="MainTree">
   <BehaviorTree ID="MainTree">
-    <RecoveryNode number_of_retries="6" name="NavigateRecovery">
+    <RecoveryNode number_of_retries="10" name="NavigateRecovery">
       <Sequence name="NavigateOuter">
         <RecoveryNode number_of_retries="1" name="InitialComputePathToPose">
           <Sequence>
@@ -70,20 +99,27 @@
               <ClearEntireCostmap name="ClearGlobalCostmap-Context" service_name="global_costmap/clear_entirely_global_costmap"/>
             </RecoveryNode>
           </RateController>
-          <RecoveryNode number_of_retries="1" name="FollowPath">
-            <FollowPath path="{path}" controller_id="FollowPath"/>
-            <ClearEntireCostmap name="ClearLocalCostmap-Context" service_name="local_costmap/clear_entirely_local_costmap"/>
-          </RecoveryNode>
+          <!-- No retry wrapper here anymore (see note 4 above) - a single FollowPath failure
+               goes straight to RecoveryFallback, which always settles + forces a fresh replan
+               from the robot's current pose before trying again. -->
+          <FollowPath path="{path}" controller_id="FollowPath"/>
         </PipelineSequence>
       </Sequence>
       <ReactiveFallback name="RecoveryFallback">
         <GoalUpdated/>
         <RoundRobin name="RecoveryActions">
-          <Sequence name="ClearingActions">
+          <Sequence name="ClearSettleReplan">
             <ClearEntireCostmap name="ClearLocalCostmap-Subtree" service_name="local_costmap/clear_entirely_local_costmap"/>
             <ClearEntireCostmap name="ClearGlobalCostmap-Subtree" service_name="global_costmap/clear_entirely_global_costmap"/>
+            <!-- FLAG 2026-09-02: briefly lowered 5->2 (held still noticeably long in the first
+                 live trial), REVERTED same day - the very next trial (bundled with the
+                 yaw_goal_tolerance revert above, see its comment and CHANGELOG.md 2026-09-02)
+                 was dramatically worse (214s/6 failures vs the prior 89s/2), with most failures
+                 showing zero progress for the FULL movement_time_allowance window on repeated
+                 fresh replans. Root cause not isolated between this and the yaw change - reverted
+                 both to retest from the last known-good state. -->
+            <Wait wait_duration="5"/>
           </Sequence>
-          <Wait wait_duration="5"/>
           <BackUp backup_dist="0.30" backup_speed="0.05"/>
         </RoundRobin>
       </ReactiveFallback>
