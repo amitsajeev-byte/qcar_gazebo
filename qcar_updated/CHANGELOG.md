@@ -118,6 +118,33 @@ nothing ever looked at them.
   current limits, waterproofing, TX2 fan) is physical-handling only - nothing for code to check.
 - Not yet deployed to the QCar or hardware-tested - `qcar_updated`'s copy only so far.
 
+## 2026-09-01 - Promoted a fresh hardware map, backing up the previous one
+
+Re-scanned the hardware map (`qcar_slam.launch.py`), `map_saver_cli`'d it, then promoted it to
+the active `maps/qcar_map_hardware.yaml`/`.pgm`, backing up the prior version first as
+`qcar_map_hardware_20260901.{yaml,pgm}`. This became the map used for the rest of today's nav2
+hardware work, including the reverse-gain investigation entries above.
+
+## 2026-09-01 - No-Gazebo kinematic sim-vs-hardware-map comparison mode
+
+Wanted to compare MPPI/planner behavior against the real hardware-captured map without Gazebo's
+mismatched world geometry getting in the way. Added `launch/qcar_nav2_kinematic_compare.launch.py`
+(brings up nav2 + the real hardware map without Gazebo), `qcar_onboard/fake_odom_node.py`
+(publishes a kinematic-integrated `/odom` + TF from `/cmd_vel` so nav2 has something to close the
+loop on without a simulator or real robot), and `config/nav2/nav2_params_compare.yaml` (adds a
+`static_layer` to the local costmap, which the normal hardware params don't need since real LiDAR
+already provides it). Built but not deeply exercised yet this session - most of the day's actual
+comparison work ended up happening directly on hardware instead.
+
+## 2026-09-01 - RViz map display fix: QoS durability mismatch caused "No map received"
+
+RViz showed a transform/map error, then explicit "No map received" warnings. Root cause:
+`map_server` publishes `/map` with `TRANSIENT_LOCAL` durability (the standard pattern for a
+latched, published-once topic), but `rviz/qcar.rviz`'s saved Map display config had `Durability
+Policy` set to `Volatile` - a durability mismatch means a late-subscribing RViz never receives
+the one-shot map message at all, regardless of `map_server` being healthy. Fixed by changing the
+Map display's `Durability Policy` to `Transient Local` in `qcar.rviz`.
+
 ## 2026-08-31 - `config/nav2/PARAMS_REFERENCE.md` refreshed - same staleness as `TUNING.md`, same day
 
 Companion doc to `TUNING.md` (also last touched 2026-07-20), same audit method: checked every
